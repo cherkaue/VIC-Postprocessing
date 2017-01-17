@@ -56,11 +56,44 @@
 #define AGG_TYPE_MIN     4 /* minimum value over agg interval */
 #define AGG_TYPE_SUM     5 /* sum over agg interval */
 
+/***** Define data type structures *****/
+typedef struct {
+  char **ColNameList;
+  char **ColStatList;
+  char UseColFile;
+  int *ColNumList;
+  int MaxColNum;
+  int Ncols;
+  float *Thres;
+} StatInfoStruct; // structure for storing information on summary statistics
+
+typedef struct {
+  char **ColNameList;
+  int *ColNumList;
+  int MaxColNum;
+  int Ncols;
+} PenInfoStruct; // structure for storing column information for additional calculations (PE and Total Runoff)
+
 // subroutine prototypes
 
+int get_header( gzFile **, char ***, char **, double **, char **, int *, int *, 
+		int *, int *, int *, int *, int *, int * );
+int get_header_ASCII( gzFile **, char ***, char **, double **, char **, int *, int *, 
+		int *, int *, int *, int *, int *, int * );
+int get_header_BINARY( gzFile **, char ***, char **, double **, char **, int *, int *, 
+		int *, int *, int *, int *, int *, int * );
+int    get_record_PEN( int, char **, int *, char **, char *, double *, int *, double *, 
+		       int, int, int *, int, PenInfoStruct, int, PenInfoStruct );
+int    get_record_ASCII( char **, int *, char **, char *, double *, int *, double *, int, 
+		       int * );
+int    get_record_BINARY( char **, int *, char **, char *, double *, int *, double *, int, 
+			  int * );
+char GetVarAggType( char * );
+/***
 int    get_header_NEW( gzFile  **fin, char ***, char **, float **, char **, 
 		       int *, int *, int *, int *, int *, int *, int *, int * );
 int    get_record_NEW( char *, int *, char **, char *, float *, int *, float *, int, 
 		       int * );
+***/
 char *get_next_string(char *, int *, char );
 char *reset_spaces( char * );

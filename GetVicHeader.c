@@ -8,15 +8,20 @@ int main(int argc, char *argv[])
   of a given file (created with PRT_HEADER = TRUE in the VIC global 
   file).  Information is output to stdout.
 
+  Modifications:
+  16-Jan-2017 Modified to make use of the newest version of get_header,
+    which can open both Binary and ASCII VIC model output file headers.
+    KAC
+
 **********************************************************************/
 {
 
-  gzFile *InFile;
-  char    filename[2048], AggText[50];;
-  char  **ColNames, *ColTypes, *ColAggTypes;
-  float  *ColMults;
-  int     TimeStep, NumLayers, NumNodes, NumBands, NumFrostFronts;
-  int     NumLakeNodes, NumCols, ErrNum, vidx, NumBytes;
+  gzFile  *InFile;
+  char     filename[2048], AggText[50];;
+  char   **ColNames, *ColTypes, *ColAggTypes;
+  double  *ColMults;
+  int      TimeStep, NumLayers, NumNodes, NumBands, NumFrostFronts;
+  int      NumLakeNodes, NumCols, ErrNum, vidx, NumBytes, BinaryFile;
 
   // check if usage message should be printed
   if ( argc != 2 ) {
@@ -36,7 +41,7 @@ int main(int argc, char *argv[])
   }
 
   // Read header information
-  ErrNum = get_header_NEW( &InFile, &ColNames, &ColTypes, &ColMults, 
+  BinaryFile = get_header( &InFile, &ColNames, &ColTypes, &ColMults, 
 			   &ColAggTypes, &TimeStep, &NumLayers, 
 			   &NumNodes, &NumBands, &NumFrostFronts, 
 			   &NumLakeNodes, &NumCols, &NumBytes );

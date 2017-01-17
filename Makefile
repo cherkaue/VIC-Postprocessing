@@ -16,8 +16,8 @@ all:
 clean::
 	/bin/rm -f *.o core *.core log *~
 
-VicOutputASMStats: VicOutputASMStats.c DateFuncs.c VicStats_1d.c
-	$(CC) -o $(INSTALL_DIR)/VicOutputASMStats VicOutputASMStats.c DateFuncs.c VicStats_1d.c $(CFLAGS) $(LIBRARY)
+VicOutputASMStats: VicOutputASMStats.c DateFuncs.c VicUtilities.c VicStats_1d.c
+	$(CC) -o $(INSTALL_DIR)/VicOutputASMStats VicOutputASMStats.c DateFuncs.c VicUtilities.c VicStats_1d.c $(CFLAGS) $(LIBRARY)
 
 GetVicHeader: GetVicHeader.c VicUtilities.c 
 	$(CC) -o $(INSTALL_DIR)/GetVicHeader GetVicHeader.c VicUtilities.c $(CFLAGS) $(LIBRARY)

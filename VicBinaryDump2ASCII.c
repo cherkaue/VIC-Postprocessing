@@ -12,6 +12,9 @@ int main(int argc, char *argv[])
   11-Fab-2008 Modified from VicLdasDump2ASCII.c             KAC  
   11-Feb-2008 Removed calls to reset_spcaes to leave "_"s in 
               variable names.   KAC
+  16-Jan-2017 Updated to make use of lastest version of get_header
+              that will work with both binary and ASCII VIC model
+              output formats.    KAC
 
   ***** Seems to only work if variables in list appear in the same order 
         as in the original file. Why????? - note from VicLdasDump2ASCII.c
@@ -20,12 +23,12 @@ int main(int argc, char *argv[])
 **********************************************************************/
 {
   gzFile *InFile;
-  char   *RawData;
+  char  **RawData;
   int    *date, UseVarList;
-  float  *data;
+  double *data;
   char    name[600];
   char  **ColNames, *ColTypes, *ColAggTypes;
-  float  *ColMults;
+  double *ColMults;
   char    VarList[MaxColumns][256];
   char   *VarName, *ptr;
   int    *OutputCol;
@@ -35,6 +38,8 @@ int main(int argc, char *argv[])
   int     ErrNum;
   int     idx, nidx, maxdate;
   int     NumBytes, NumRead, day, ReadBytes, RawPtr;
+  int     BinaryFile;
+  PenInfoStruct TempInfo; // used as a placeholder for the get_record command
 
   date      = (int *)malloc(NUM_DATE_VALS*sizeof(int));
 
@@ -76,20 +81,21 @@ int main(int argc, char *argv[])
 
   /** Process grid flux file **/
   DONE = FALSE;
-  ErrNum = get_header_NEW( &InFile, &ColNames, &ColTypes, &ColMults, 
-			     &ColAggTypes, &TimeStep, &NumLayers, &NumNodes, 
-			     &NumBands, &NumFrostFronts, &NumLakeNodes, 
-			     &NumCols, &NumBytes );
+  BinaryFile = get_header( &InFile, &ColNames, &ColTypes, &ColMults, 
+			   &ColAggTypes, &TimeStep, &NumLayers, &NumNodes, 
+			   &NumBands, &NumFrostFronts, &NumLakeNodes, 
+			   &NumCols, &NumBytes );
   if ( ErrNum < 0 ) {
     fprintf( stderr, "\t... exiting program.\n" );
     exit(-1);
   }
-  data = (float *)malloc(NumCols*sizeof(float));
+  data = (double *)malloc(NumCols*sizeof(double));
   fprintf( stderr, "Number of bytes per line: %i\n", NumBytes );
 
   // allocate arrays for reading each line of data
   NumRead = NumBytes*(int)(24/TimeStep);
-  RawData = (char *)malloc(NumRead*sizeof(char));
+  RawData = (char **)malloc(sizeof(char*));
+  RawData[0] = (char *)malloc(NumRead*sizeof(char));
   OutputCol = (int *)calloc( NumCols, sizeof( int ) );
   day = 0;
   if ( TimeStep < 24 ) maxdate = 4;
@@ -107,8 +113,13 @@ int main(int argc, char *argv[])
   while ( !gzeof( InFile ) ) {
     ReadBytes = gzread(InFile,RawData,NumBytes*sizeof(char));
     RawPtr = 0;
+    /***
     ErrNum = get_record_NEW( RawData, &RawPtr, ColNames, ColTypes, 
 			     ColMults, date, data, NumCols, &DataStart );
+    ***/
+    ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
+			     ColMults, date, data, NumCols, NumOut, &DataStart, 
+			     FALSE, TempInfo, FALSE, TempInfo );
     for ( idx = 0; idx < maxdate-1; idx++ ) fprintf( stdout, "%i\t", date[idx] );
     fprintf( stdout, "%i", date[idx] );
     for ( idx = 0; idx < NumCols-maxdate; idx++ )
