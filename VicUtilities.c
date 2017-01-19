@@ -282,6 +282,8 @@ int get_header_ASCII( gzFile **fin,
   (*ColAggTypes) = (char *)realloc((*ColAggTypes),vidx*sizeof(char));  
 
   free ((char *)TmpStr);
+
+  (*NumBytes) = (*NumCols); // Bytes not used for ASCII, so set equal to number of columns
   
   return (0);
   

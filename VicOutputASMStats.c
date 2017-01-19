@@ -532,7 +532,7 @@ int main(int argc, char *argv[]) {
     // Read in full flux file
     if ( BinaryFile ) {
       // read in entire binary data file
-      if ( ( ReadBytes = gzread(fin,RawData[0],NumRead) ) != NumRead ) {
+       if ( ( ReadBytes = gzread(fin,RawData[0],NumRead) ) != NumRead ) {
 	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got %d of %ld bytes.\n", filename, ReadBytes, NumRead*sizeof(char) );
 	//return (-1);
       }

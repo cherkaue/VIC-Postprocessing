@@ -4,9 +4,12 @@ int main(int argc, char *argv[])
 /**********************************************************************
   VicBinaryDump2ASCII.c     Keith Cherkauer        February 11, 2008
 
-  This program reads VIC model binary files with headers (post 4.1.0 r4)
-  and extracts actual values for all model output variables for the 
-  specified period of interest.  
+  This program reads VIC model output files with headers (post 4.1.0 r4)
+  and extracts actual values for all model output variables or for a 
+  subset of those variables if provided.  Note that columns will be in 
+  the same order as they appear in the VIC model output file no matter
+  what order they were listed on the command line.  But only those 
+  variables listed on the command line will be in the output file.
 
   Modified:
   11-Fab-2008 Modified from VicLdasDump2ASCII.c             KAC  
@@ -15,6 +18,8 @@ int main(int argc, char *argv[])
   16-Jan-2017 Updated to make use of lastest version of get_header
               that will work with both binary and ASCII VIC model
               output formats.    KAC
+  18-Jan-2017 Updated code to work correctly and without errors
+              when given an ASCII data file.             KAC
 
   ***** Seems to only work if variables in list appear in the same order 
         as in the original file. Why????? - note from VicLdasDump2ASCII.c
@@ -94,8 +99,16 @@ int main(int argc, char *argv[])
 
   // allocate arrays for reading each line of data
   NumRead = NumBytes*(int)(24/TimeStep);
-  RawData = (char **)malloc(sizeof(char*));
-  RawData[0] = (char *)malloc(NumRead*sizeof(char));
+  if ( BinaryFile ) {
+    // Binary file format, so NumRead is actaully the number of bytes
+    RawData = (char **)malloc(sizeof(char*));
+    RawData[0] = (char *)malloc(NumRead*sizeof(char));
+  }
+  else {
+    // ASCII file format, so NumRead is te number of strings to read
+    RawData = (char **)malloc(sizeof(char *));
+    RawData[0] = (char *)malloc(MaxCharData*sizeof(char));
+  }
   OutputCol = (int *)calloc( NumCols, sizeof( int ) );
   day = 0;
   if ( TimeStep < 24 ) maxdate = 4;
@@ -111,12 +124,18 @@ int main(int argc, char *argv[])
 
   // Read all data records
   while ( !gzeof( InFile ) ) {
-    ReadBytes = gzread(InFile,RawData,NumBytes*sizeof(char));
+    if ( BinaryFile ) {
+      //ReadBytes = gzread(InFile,RawData,NumBytes*sizeof(char));
+      if ( ( ReadBytes = gzread(InFile,RawData[0],NumRead) ) != NumRead ) {
+	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got %d of %ld bytes.\n", name, ReadBytes, NumRead*sizeof(char) );
+      }
+    }
+    else {
+      if ( gzgets(InFile,RawData[0],MaxCharData) == NULL ) {
+	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got incomplete line.\n", name );
+      }
+    }
     RawPtr = 0;
-    /***
-    ErrNum = get_record_NEW( RawData, &RawPtr, ColNames, ColTypes, 
-			     ColMults, date, data, NumCols, &DataStart );
-    ***/
     ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
 			     ColMults, date, data, NumCols, NumOut, &DataStart, 
 			     FALSE, TempInfo, FALSE, TempInfo );
