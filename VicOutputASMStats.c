@@ -45,6 +45,18 @@ int main(int argc, char *argv[]) {
   Program can output ESRI (ArcInfo) ASCII raster files and XYZ files.
 
   Modifications:
+  2017-Mar-27 Modified to skip over cell files that fall outside of the 
+    previously defined extent of the output ArcInfo raster file.  
+    Previously this threw an error and cause the program to end, even when 
+    valid cell files were found within the extent of the raster domain.  KAC
+  2017-Apr-18 Updated calculation of number of seasons to output by 
+    looping with get_next_season rather than trying to estimate the
+    number of times 4 periods occurs within a year.  Produces more 
+    reliable output from Seasonal statistics, as previously it was 
+    crashing when it could not open files past the end of the data.  KAC
+  2017-05-17 Fixed accounting so that when end of analysis period 
+    equals the end of the file, the program will not crash with a 
+    Segementation Fault.                                             KAC
 
 ***********************************************************************/
 
@@ -61,6 +73,7 @@ int main(int argc, char *argv[]) {
   char OVERWRITE;
   char PrtAllGrids = FALSE;
   char ArcGrid = FALSE;
+  char ProcessFile;
 
   int filenum;
   int Nfile;
@@ -69,7 +82,7 @@ int main(int argc, char *argv[]) {
   int col;
   int ncol;
   int cidx, didx;
-  int DONE;
+  int DONE, LAST;
   int Nrec;
   int ErrNum;
   int NumSets, SumSets, Nvals;
@@ -165,6 +178,9 @@ int main(int argc, char *argv[]) {
   nrow = (int)((maxlat - minlat) / cellsize);
   ncol = (int)((maxlng - minlng) / cellsize);
   Ncells = nrow*ncol;
+  if ( nrow == 1 || ncol == 1 ) {
+    fprintf( stderr, "WARNING: Defined cells are at best one-dimensions with %i rows and %i columns.  If you are expecting a raster output, then double check your file list format.\n", nrow, ncol );
+  }
 
   // Setup input and output directories
   strcpy(GridName,argv[3]);
@@ -236,11 +252,14 @@ int main(int argc, char *argv[]) {
   startdate.year    = (int)(atof(argv[6])) - startdate.month*1000000 - startdate.day*10000;
   startdate.hour    = 0;
   startdate.juldate = calc_juldate(startdate.year,startdate.month,startdate.day,0.);
+  startdate         = get_season(startdate);
+
   enddate.month     = (int)(atof(argv[7])/1000000);
   enddate.day       = (int)(atof(argv[7])/10000) - enddate.month*100;
   enddate.year      = (int)(atof(argv[7])) - enddate.month*1000000 - enddate.day*10000;
   enddate.hour      = 0;
   enddate.juldate   = calc_juldate(enddate.year,enddate.month,enddate.day,0);
+  enddate           = get_season(enddate);
   
   // Process statistic type - adjust start and end date to encompass full periods
   StatType    = argv[8][0];
@@ -282,7 +301,14 @@ int main(int argc, char *argv[]) {
     else 
       // End in Winter
       enddate.juldate = calc_juldate( enddate.year, 12, 1, 0 );
-    NumSets = (enddate.year - startdate.year + 1) * 4;
+    // get number of seasons to process
+    sidx = 0;
+    nextdate = startdate;
+    while ( nextdate.juldate < enddate.juldate ) {
+      nextdate = get_next_season( nextdate );
+      sidx++;
+    }
+    NumSets = sidx;
     SumSets = 4;
     strcat( GridName, "_\%i_\%s_\%s.asc" ); // build seasonal output file name
   }
@@ -376,11 +402,12 @@ int main(int argc, char *argv[]) {
   }
 
   // establish next date as equal to start date for now
-  nextdate.day = startdate.day;
-  nextdate.month = startdate.month;
-  nextdate.year = startdate.year;
-  nextdate.hour = startdate.hour;
+  nextdate.day     = startdate.day;
+  nextdate.month   = startdate.month;
+  nextdate.year    = startdate.year;
+  nextdate.hour    = startdate.hour;
   nextdate.juldate = startdate.juldate;
+  nextdate         = get_season(nextdate);
 
   // Build blank files for overall statistics
   for ( sidx = 0; sidx < SumSets; sidx++ ) {
@@ -417,9 +444,9 @@ int main(int argc, char *argv[]) {
   /** Process Files **/
   /*******************/
 
-  //SkipRec = NODATA;
-
   for ( filenum = 0; filenum < Nfile; filenum++ ) {
+
+    ProcessFile = TRUE;
 
     /* Build flux file name and open */
     fscanf(flist,"%s %lf %lf",filename,&tmplat,&tmplng);
@@ -461,9 +488,9 @@ int main(int argc, char *argv[]) {
 
       // Check that current row and column are in the Arc/Info file boundaries
       if ( row >= nrow || col >= ncol ) {
-	fprintf(stderr,"%s located at (%i,%i) is outside the range of the grid file (%i,%i).\n",
+	fprintf(stderr,"WARNING: %s located at (%i,%i) is outside the range of the grid file (%i,%i). Will not be processed.\n",
 		filename,row,col,nrow,ncol);
-	exit(0);
+	ProcessFile = FALSE;
       }
       fprintf(stdout,"\trow = %i,\tcol = %i\n",row,col);
     }
@@ -474,255 +501,273 @@ int main(int argc, char *argv[]) {
       fprintf(stdout,"\tline = %i\n",row);
     }
 
-    // Initialize accounting variables
-    DONE = FALSE;
-    sidx = NODATA;
+    if ( ProcessFile ) {
 
-    if ( filenum == 0 ) {
-      // Use first file to setup all additional processing
-      // determine number of bytes in full flux file, in case user has requested shorter time period
-      if ( BinaryFile ) {
-	// determine number of bytes in full binary flux file, in case user has requested shorter time period
-	RawData = (char **)malloc(sizeof(char*));
-	RawData[0] = (char *)malloc(NumBytes*sizeof(char));
-	while ( ( ReadBytes = gzread(fin,RawData[0],NumBytes*sizeof(char)) ) > 0 ) {
-	  NumRead += ReadBytes;
+      // Initialize accounting variables
+      DONE = FALSE;
+      LAST = FALSE;
+      sidx = NODATA;
+
+      if ( filenum == 0 ) {
+	// Use first file to setup all additional processing
+	// determine number of bytes in full flux file, in case user has requested shorter time period
+	if ( BinaryFile ) {
+	  // determine number of bytes in full binary flux file, in case user has requested shorter time period
+	  RawData = (char **)malloc(sizeof(char*));
+	  RawData[0] = (char *)malloc(NumBytes*sizeof(char));
+	  while ( ( ReadBytes = gzread(fin,RawData[0],NumBytes*sizeof(char)) ) > 0 ) {
+	    NumRead += ReadBytes;
+	  }
 	}
-      }
-      else {
-	// determine number of lines in full ASCII flux file, in case shorter time period requested
-	RawData = (char **)malloc(sizeof(char *));
-	RawData[0] = (char *)malloc(MaxCharData*sizeof(char));
-	while ( ( gzgets( fin, RawData[0], MaxCharData) ) != NULL ) {
-	  NumRead ++;  // in this case a line counter
+	else {
+	  // determine number of lines in full ASCII flux file, in case shorter time period requested
+	  RawData = (char **)malloc(sizeof(char *));
+	  RawData[0] = (char *)malloc(MaxCharData*sizeof(char));
+	  while ( ( gzgets( fin, RawData[0], MaxCharData) ) != NULL ) {
+	    NumRead ++;  // in this case a line counter
+	  }
 	}
-      }
-      // reset start of flux file
-      gzrewind( fin );
-      BinaryFile = get_header( &fin, &ColNames, &ColTypes, &ColMults, 
-			       &ColAggTypes, &TimeStep, &NumLayers, 
-			       &NumNodes, &NumBands, &NumFrostFronts, 
-			       &NumLakeNodes, &NumCols, &NumBytes );
-      // reallocate Raw data for full size of flux file
-      if ( BinaryFile ) {
-	// allocation for binary file
-	if ( ( RawData[0] = (char *)realloc( RawData[0], NumRead ) ) == NULL ) {
-	  fprintf( stderr, "ERROR: Unable to allocate sufficient memory to read in full flux file.\n" );
-	  return (-1);
-	}
-      }
-      else {
-	// free previous allocation for ASCII file
-	free ((char*)RawData[0]);
-	free ((char*)RawData);
-	// allocation for ASCII file
-	if ( ( RawData = (char **)malloc( NumRead*sizeof(char * ) ) ) == NULL ) {
-	       fprintf( stderr, "ERROR: Unable to allocate sufficient memory to read in full flux file.\n" );
-	  return (-1);
-	}
-	for ( lidx = 0; lidx < NumRead; lidx ++ ) {
-	  if ( ( RawData[lidx] = (char *)malloc( MaxCharData*sizeof(char) ) ) == NULL ) {
+	// reset start of flux file
+	gzrewind( fin );
+	BinaryFile = get_header( &fin, &ColNames, &ColTypes, &ColMults, 
+				 &ColAggTypes, &TimeStep, &NumLayers, 
+				 &NumNodes, &NumBands, &NumFrostFronts, 
+				 &NumLakeNodes, &NumCols, &NumBytes );
+	// reallocate Raw data for full size of flux file
+	if ( BinaryFile ) {
+	  // allocation for binary file
+	  if ( ( RawData[0] = (char *)realloc( RawData[0], NumRead ) ) == NULL ) {
 	    fprintf( stderr, "ERROR: Unable to allocate sufficient memory to read in full flux file.\n" );
 	    return (-1);
 	  }
 	}
+	else {
+	  // free previous allocation for ASCII file
+	  free ((char*)RawData[0]);
+	  free ((char*)RawData);
+	  // allocation for ASCII file
+	  if ( ( RawData = (char **)malloc( NumRead*sizeof(char * ) ) ) == NULL ) {
+	    fprintf( stderr, "ERROR: Unable to allocate sufficient memory to read in full flux file.\n" );
+	    return (-1);
+	  }
+	  for ( lidx = 0; lidx < NumRead; lidx ++ ) {
+	    if ( ( RawData[lidx] = (char *)malloc( MaxCharData*sizeof(char) ) ) == NULL ) {
+	      fprintf( stderr, "ERROR: Unable to allocate sufficient memory to read in full flux file.\n" );
+	      return (-1);
+	    }
+	  }
+	}
       }
-    }
 
-    // Read in full flux file
-    if ( BinaryFile ) {
-      // read in entire binary data file
-       if ( ( ReadBytes = gzread(fin,RawData[0],NumRead) ) != NumRead ) {
-	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got %d of %ld bytes.\n", filename, ReadBytes, NumRead*sizeof(char) );
-	//return (-1);
-      }
-    }
-    else {
-      // read in entire ASCII data file
-      for ( lidx = 0; lidx < NumRead; lidx ++ ) {
-	if ( gzgets(fin,RawData[lidx],MaxCharData) == NULL ) {
-	  fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got only %d of %d lines.\n", filename, lidx, NumRead );
+      // Read in full flux file
+      if ( BinaryFile ) {
+	// read in entire binary data file
+	if ( ( ReadBytes = gzread(fin,RawData[0],NumRead) ) != NumRead ) {
+	  fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got %d of %ld bytes.\n", filename, ReadBytes, NumRead*sizeof(char) );
 	  //return (-1);
 	}
       }
+      else {
+	// read in entire ASCII data file
+	for ( lidx = 0; lidx < NumRead; lidx ++ ) {
+	  if ( gzgets(fin,RawData[lidx],MaxCharData) == NULL ) {
+	    fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got only %d of %d lines.\n", filename, lidx, NumRead );
+	    //return (-1);
+	  }
+	}
+      }
+
+      // Process file until complete
+      RawPtr = 0;
+      
+      // read date from current line
+      ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
+			       ColMults, date, data, NumCols, NumOut, &OutStart, 
+			       CalcPE, PenInfo, CalcTR, TRoffInfo );
+      
+      // reset to correct ASCII position before processing
+      if ( !BinaryFile ) RawPtr = 0; 
+      
+      // compute julian day of current record
+      tmpdate.year = date[0];
+      tmpdate.month = date[1];
+      tmpdate.day = date[2];
+      tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
+      
+      while( !DONE && ErrNum >= 0 ) { 
+	// process all lines in the current file
+	
+	if ( tmpdate.juldate >= startdate.juldate && sidx == NODATA ) {
+	  // Initialize date accounting for new grid cell
+	  sidx = 0;
+	  lastdate.juldate = startdate.juldate;
+	  if ( StatType == 'A' ) nextdate = get_next_year( startdate );
+	  else if ( StatType == 'S' ) nextdate = get_next_season( startdate );
+	  else if ( StatType == 'M' ) nextdate = get_next_month( startdate );
+	  else if ( StatType == 'W' ) nextdate = get_next_week( startdate );
+	  else if ( StatType == 'V' ) nextdate = enddate;
+	  else nextdate = get_next_day( startdate );
+	  nextdate = get_juldate( nextdate );
+	  // Create output file names and initialize grid files
+	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
+	    if ( filenum == 0 && PrtAllGrids ) {
+	      ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
+						      StatInfo, GridFileName,
+						      startdate, sidx, cidx, 
+						      NumSets, nrow, ncol, 
+						      minlat, minlng,
+						      cellsize, NODATA, 
+						      OVERWRITE);
+	    }
+	    // Initialize daily statistic storage variables for each new grid cell
+	    for ( didx = 0; didx < 366; didx++ ) {
+	      gridval[cidx][didx] = (double)NODATA;  
+	    }
+	  }
+	  Nrec = 0;
+	}
+	else if ( tmpdate.juldate >= nextdate.juldate && sidx >= 0 ) {
+	  Nvals = (int)(nextdate.juldate+0.5)-(int)(lastdate.juldate+0.5);
+	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
+	    // compute base statistics
+	    if ( strcasecmp(StatInfo.ColStatList[cidx], "max") == 0 )
+	      // Find the maximum value
+	      GridValues[sidx][cidx][row][col] = get_max(gridval[cidx], Nvals, (double)NODATA );
+	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "min") == 0 ) {
+	      // Find the minimum value
+	      GridValues[sidx][cidx][row][col] = get_min(gridval[cidx], Nvals, (double)NODATA );
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "othres" ) == 0 ) {
+	      // Count all days a value is under the given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_count_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "uthres" ) == 0 ) {
+	      // Count all days a value is under the given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_count_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "ldayo" ) == 0 ) {
+	      // find the last day a value is over a given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      //
+	      // SHOULD I ADD DATES FROM January 1 to get DOY?  Do NOT SEEM TO HAVE SUCH A FUNCTION
+	      //
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "ldayu" ) == 0 ) {
+	      // find the last day a value is under a given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "fdayo" ) == 0 ) {
+	      // find the first day a value is over a given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	    }
+	    else if ( strcasecmp( StatInfo.ColStatList[cidx], "fdayu" ) == 0 ) {
+	      // find the first day a value is under a given threshold
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	    }
+	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "stdev") == 0 ) {
+	      // Find the standard deviation
+	      GridValues[sidx][cidx][row][col] = get_stdev(gridval[cidx], get_mean(gridval[cidx], Nvals, (double)NODATA), Nvals, (double)NODATA );
+	    }
+	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "sum") == 0 ) {
+	      // Find the cumulative sum
+	      GridValues[sidx][cidx][row][col] = get_sum(gridval[cidx], Nvals, (double)NODATA );
+	    }
+	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "first") == 0 ) {
+	      // Find the first value of the period
+	      GridValues[sidx][cidx][row][col] = gridval[cidx][0];
+	    }
+	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "last") == 0 ) {
+	      // Find the last value of the period
+	      GridValues[sidx][cidx][row][col] = gridval[cidx][Nvals-1];
+	    }
+	    else
+	    // Find the mean
+	      GridValues[sidx][cidx][row][col] = get_mean(gridval[cidx], Nvals, (double)NODATA );
+	    // Create and initialize output file name for next increment
+	    if ( filenum == 0 && tmpdate.juldate < enddate.juldate && PrtAllGrids ) {
+	      ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
+						      StatInfo, GridFileName,
+						      nextdate, sidx+1, cidx, 
+						      NumSets, nrow, ncol, minlat, minlng,
+						      cellsize, NODATA, 
+						      OVERWRITE);
+	    }
+	    // Initialize daily statistic storage variables for each new grid cell
+	    for ( didx = 0; didx < 366; didx++ ) {
+	      gridval[cidx][didx] = (double)NODATA;  
+	    }
+	  }
+	  Nrec = 0;
+	  // Update Date Information
+	  sidx++;
+	  lastdate.juldate = nextdate.juldate;
+	  if ( StatType == 'A' ) nextdate = get_next_year( nextdate );
+	  else if ( StatType == 'S' ) nextdate = get_next_season( nextdate );
+	  else if ( StatType == 'M' ) nextdate = get_next_month( nextdate );
+	  else if ( StatType == 'W' ) nextdate = get_next_week( nextdate );
+	  else nextdate = get_next_day( nextdate );
+	  nextdate = get_juldate( nextdate );
+	}
+	
+	// process line if date is between start and next dates
+	if ( tmpdate.juldate >= startdate.juldate 
+	     && tmpdate.juldate < nextdate.juldate ) {
+	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx ++ ) {
+	    // store current value
+	    gridval[cidx][(int)(tmpdate.juldate+0.5)-(int)(lastdate.juldate+0.5)] = data[StatInfo.ColNumList[cidx]];
+	  }
+	  Nrec++;
+	}
+	
+	// read data from current line if there is still data left to read
+	if ( LAST ) DONE = TRUE; // don't read potentially empty line
+	else if ( !BinaryFile && RawPtr == NumRead ) {
+	  // reached end of file, stop reading data but one more pass to process
+	  LAST = TRUE;
+	  tmpdate = get_next_day( tmpdate );
+	}
+	else if ( tmpdate.juldate < enddate.juldate ) {
+	  // Still data to read so process the next line of data
+	  ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, 
+				   ColTypes, ColMults, date, data, NumCols, 
+				   NumOut, &OutStart, CalcPE, PenInfo, CalcTR, 
+				   TRoffInfo );
+	  
+	  if ( ErrNum >= 0 ) {
+	    // compute julian day of current record
+	    tmpdate.year = date[0];
+	    tmpdate.month = date[1];
+	    tmpdate.day = date[2];
+	    tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
+	  }
+	  else if ( tmpdate.juldate+1 == enddate.juldate ) {
+	    tmpdate.year = enddate.year;
+	    tmpdate.month = enddate.month;
+	    tmpdate.day = enddate.day;
+	    tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
+	    ErrNum = 0;
+	  }	
+
+	  // Check that current cell had valid data
+	  CheckSum = 0;
+	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ )
+	    if ( gridval[cidx][0] != (double)NODATA )
+	      CheckSum += gridval[cidx][0];
+	  if ( CheckSum == 0 ) 
+	    fprintf(stderr,"WARNING: Possible problem with cell at %f, %f, since summary statistics are all 0 or NODATA.\n", tmplat, tmplng);
+
+	}
+	else { 
+	  DONE = TRUE; 
+	}
+	
+      }
+
     }
-
-    // Process file until complete
-    RawPtr = 0;
-
-    // read date from current line
-    ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
-			     ColMults, date, data, NumCols, NumOut, &OutStart, 
-			     CalcPE, PenInfo, CalcTR, TRoffInfo );
-
-    // reset to correct ASCII position before processing
-    if ( !BinaryFile ) RawPtr = 0; 
     
-    // compute julian day of current record
-    tmpdate.year = date[0];
-    tmpdate.month = date[1];
-    tmpdate.day = date[2];
-    tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
-
-    while( !DONE && ErrNum >= 0 ) { 
-      // process all lines in the current file
-
-      if ( tmpdate.juldate >= startdate.juldate && sidx == NODATA ) {
-	// Initialize date accounting for new grid cell
-	sidx = 0;
-	lastdate.juldate = startdate.juldate;
-	if ( StatType == 'A' ) nextdate = get_next_year( startdate );
-	else if ( StatType == 'S' ) nextdate = get_next_season( startdate );
-	else if ( StatType == 'M' ) nextdate = get_next_month( startdate );
-	else if ( StatType == 'W' ) nextdate = get_next_week( startdate );
-	else if ( StatType == 'V' ) nextdate = enddate;
-	else nextdate = get_next_day( startdate );
-	nextdate = get_juldate( nextdate );
-	// Create output file names and initialize grid files
-	for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-	  if ( filenum == 0 && PrtAllGrids ) {
-	    ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						    StatInfo, GridFileName,
-						    startdate, sidx, cidx, 
-						    NumSets, nrow, ncol, 
-						    minlat, minlng,
-						    cellsize, NODATA, 
-						    OVERWRITE);
-	  }
-	  // Initialize daily statistic storage variables for each new grid cell
-	  for ( didx = 0; didx < 366; didx++ ) {
-	    gridval[cidx][didx] = (double)NODATA;  
-	  }
-	}
-	Nrec = 0;
-      }
-      else if ( tmpdate.juldate >= nextdate.juldate && sidx >= 0 ) {
-	Nvals = (int)(nextdate.juldate+0.5)-(int)(lastdate.juldate+0.5);
-	for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-	  // compute base statistics
-	  if ( strcasecmp(StatInfo.ColStatList[cidx], "max") == 0 )
-	    // Find the maximum value
-	    GridValues[sidx][cidx][row][col] = get_max(gridval[cidx], Nvals, (double)NODATA );
-	  else if ( strcasecmp(StatInfo.ColStatList[cidx], "min") == 0 ) {
-	    // Find the minimum value
-	    GridValues[sidx][cidx][row][col] = get_min(gridval[cidx], Nvals, (double)NODATA );
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "othres" ) == 0 ) {
-	    // Count all days a value is under the given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_count_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "uthres" ) == 0 ) {
-	    // Count all days a value is under the given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_count_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "ldayo" ) == 0 ) {
-	    // find the last day a value is over a given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "ldayu" ) == 0 ) {
-	    // find the last day a value is under a given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "fdayo" ) == 0 ) {
-	    // find the first day a value is over a given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp( StatInfo.ColStatList[cidx], "fdayu" ) == 0 ) {
-	    // find the first day a value is under a given threshold
-	    GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
-	  }
-	  else if ( strcasecmp(StatInfo.ColStatList[cidx], "stdev") == 0 ) {
-	    // Find the standard deviation
-	    GridValues[sidx][cidx][row][col] = get_stdev(gridval[cidx], get_mean(gridval[cidx], Nvals, (double)NODATA), Nvals, (double)NODATA );
-	  }
-	  else if ( strcasecmp(StatInfo.ColStatList[cidx], "sum") == 0 ) {
-	    // Find the cumulative sum
-	    GridValues[sidx][cidx][row][col] = get_sum(gridval[cidx], Nvals, (double)NODATA );
-	  }
-	  else if ( strcasecmp(StatInfo.ColStatList[cidx], "first") == 0 ) {
-	    // Find the first value of the period
-	    GridValues[sidx][cidx][row][col] = gridval[cidx][0];
-	  }
-	  else if ( strcasecmp(StatInfo.ColStatList[cidx], "last") == 0 ) {
-	    // Find the last value of the period
-	    GridValues[sidx][cidx][row][col] = gridval[cidx][Nvals-1];
-	  }
-	  else
-	    // Fina the mean
-	    GridValues[sidx][cidx][row][col] = get_mean(gridval[cidx], Nvals, (double)NODATA );
-	  // Create and initialize output file name for next increment
-	  if ( filenum == 0 && tmpdate.juldate < enddate.juldate && PrtAllGrids ) {
-	    ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						    StatInfo, GridFileName,
-						    nextdate, sidx+1, cidx, 
-						    NumSets, nrow, ncol, minlat, minlng,
-						    cellsize, NODATA, 
-						    OVERWRITE);
-	  }
-	  // Initialize daily statistic storage variables for each new grid cell
-	  for ( didx = 0; didx < 366; didx++ ) {
-	    gridval[cidx][didx] = (double)NODATA;  
-	  }
-	}
-	Nrec = 0;
-	// Update Date Information
-	sidx++;
-	lastdate.juldate = nextdate.juldate;
-	if ( StatType == 'A' ) nextdate = get_next_year( nextdate );
-	else if ( StatType == 'S' ) nextdate = get_next_season( nextdate );
-	else if ( StatType == 'M' ) nextdate = get_next_month( nextdate );
-	else if ( StatType == 'W' ) nextdate = get_next_week( nextdate );
-	else nextdate = get_next_day( nextdate );
-	nextdate = get_juldate( nextdate );
-      }
-
-      // process line if date is between start and next dates
-      if ( tmpdate.juldate >= startdate.juldate 
-	   && tmpdate.juldate < nextdate.juldate ) {
-	for ( cidx = 0; cidx < StatInfo.Ncols; cidx ++ ) {
-	  // store current value
-	  gridval[cidx][(int)(tmpdate.juldate+0.5)-(int)(lastdate.juldate+0.5)] = data[StatInfo.ColNumList[cidx]];
-	}
-	Nrec++;
-      }
-
-      // read data from current line
-      ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, 
-			       ColTypes, ColMults, date, data, NumCols, 
-			       NumOut, &OutStart, CalcPE, PenInfo, CalcTR, 
-			       TRoffInfo );
-
-      if ( ErrNum >= 0 ) {
-	// compute julian day of current record
-	tmpdate.year = date[0];
-	tmpdate.month = date[1];
-	tmpdate.day = date[2];
-	tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
-      }
-      else if ( tmpdate.juldate+1 == enddate.juldate ) {
-	tmpdate.year = enddate.year;
-	tmpdate.month = enddate.month;
-	tmpdate.day = enddate.day;
-	tmpdate.juldate = calc_juldate(tmpdate.year,tmpdate.month,tmpdate.day,0);
-	ErrNum = 0;
-      }	
-
-      // check if done - this gets the last period, but will it crash if that is also the end of the file?
-      if ( tmpdate.juldate > enddate.juldate ) DONE =  TRUE;
-
-    }
-
-    // Check that current cell had valid data
-    CheckSum = 0;
-    for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ )
-      if ( gridval[cidx][0] != (double)NODATA )
-	CheckSum += gridval[cidx][0];
-    if ( CheckSum == 0 ) 
-      fprintf(stderr,"WARNING: Possible problem with cell at %f, %f, since summary statistics are all 0 or NODATA.\n", tmplat, tmplng);
-
     /* Close grid file */
     gzclose(fin);
-
+    
   }
 
   //
