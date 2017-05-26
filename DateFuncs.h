@@ -4,7 +4,7 @@
 #endif
 
 // define calendar variables
-static char *SeasonNames[] = { "WIN", "SPR", "SUM", "AUT" };
+static char *SeasonNames[] = { "SPR", "SUM", "AUT", "WIN" };
 static char *MonthNames[] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
 static int   DaysInMonth[] = { 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 static int   SeasonNumbers[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2 };
