@@ -57,6 +57,8 @@ int main(int argc, char *argv[]) {
   2017-05-17 Fixed accounting so that when end of analysis period 
     equals the end of the file, the program will not crash with a 
     Segementation Fault.                                             KAC
+  2017-05-23 Added additional metrics to help with Agricultural metrics
+    for the IN-CCIA report.                                         KAC
 
 ***********************************************************************/
 
