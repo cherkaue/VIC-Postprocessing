@@ -425,7 +425,9 @@ int get_record_PEN( int            BinaryFile,
 		    int            CalcPE,
 		    PenInfoStruct  PenInfo,
 		    int            CalcTR,
-		    PenInfoStruct  TRoffInfo ) {
+		    PenInfoStruct  TRoffInfo,
+		    int            CalcMGDD,
+		    PenInfoStruct  MGDDInfo ) {
   /********************************************************************************
     Makes sure that the correct get_record function is called based on the type
     of data file being processed.
@@ -439,6 +441,8 @@ int get_record_PEN( int            BinaryFile,
   int                 cidx, vidx;
   double Rnet, G, U, Ts, RH, Ta;
   double SVP, vpd, delta, lv, gamma, A, denominator;
+  double tmpTMIN, tmpTMAX;
+  double tmpCurrJulDate, tmpStartJulDate, tmpEndJulDate;
 
   if ( BinaryFile ) 
     get_record_BINARY( RawData, RawPtr, ColNames, ColTypes, ColMults,
@@ -478,6 +482,29 @@ int get_record_PEN( int            BinaryFile,
   /***** Compute total runoff and add to data[cidx] *****/
   if ( CalcTR )
     data[TRoffInfo.ColNumList[2]] = data[TRoffInfo.ColNumList[0]] + data[TRoffInfo.ColNumList[1]];
+
+  /***** Compute modified growing degree days (MGDD) and add to data[cidx] *****/
+  if ( CalcMGDD ) {
+    // Modified Growing Degree Day based on the default method calculated
+    // by the Midwest Regional Climate Center (MRCC) as of May 2017
+    // mrcc.isws.illinois.edu/cliwatch/mgdd/
+    tmpCurrJulDate = calc_juldate( date[0], date[1], date[2], 0 );
+    tmpStartJulDate = calc_juldate( date[0], 4, 1, 0 );
+    tmpEndJulDate = calc_juldate( date[0], 12, 1, 0 );
+    data[MGDDInfo.ColNumList[2]] = 0; // initialize MGDD to 0
+    if ( tmpCurrJulDate >= tmpStartJulDate && tmpCurrJulDate < tmpEndJulDate ) {
+      // within the valid season, so convert temps to degree F
+      tmpTMIN = ( data[TRoffInfo.ColNumList[0]] * 9. ) / 5. + 32.;
+      tmpTMAX = ( data[TRoffInfo.ColNumList[1]] * 9. ) / 5. + 32.;
+      if ( tmpTMAX >= 50. ) {
+	if ( tmpTMIN < 50. ) tmpTMIN = 50;
+	if ( tmpTMIN < 86. ) {
+	  if ( tmpTMAX > 86. ) tmpTMAX = 86.;
+	  data[MGDDInfo.ColNumList[2]] = (tmpTMAX + tmpTMIN) / 2. - 10.;
+	}
+      }
+    }
+  }
 
   return (0);
 

@@ -155,6 +155,36 @@ int get_count_over_thres(double *values, double thres, int N, double NoData) {
 
 }
 
+double get_average_days_over_thres(double *values, double thres, int N, double NoData) {
+  // computes the average number of days over a threshold
+
+  int index;
+  int sum;
+  int count;
+  int over;
+
+  sum=0;
+  count=0;
+  over=0;
+  for(index=0;index<N;index++) {
+    if(values[index]!=NoData) {
+      if(values[index]>thres) {
+	sum++;
+	over=1;
+      }
+      else {
+	if ( over ) {
+	  count++;
+	  over=0;
+	}
+      }
+    }
+  }
+  
+  return ((double)sum/(double)count);
+
+}
+
 int get_consecutive_days_over_thres(double *values, double thres, int N, double NoData) {
   // computes the number of records under a threshold between first and last occurance identifeid from the middle of the record (e.g., growing sesason between first and last frost)
 
@@ -163,11 +193,11 @@ int get_consecutive_days_over_thres(double *values, double thres, int N, double 
 
   for(first=N/2;first>=0;first--)
     if(values[first]!=NoData)
-      if(values[first]>thres) break;
+      if(values[first]<thres) break;
   
   for(last=N/2;last<N;last++)
     if(values[last]!=NoData)
-      if(values[last]>thres) break;
+      if(values[last]<thres) break;
   
   return (last-first);
 
@@ -188,6 +218,36 @@ int get_count_under_thres(double *values, double thres, int N, double NoData) {
 
 }
 
+double get_average_days_under_thres(double *values, double thres, int N, double NoData) {
+  // computes the average number of days under a threshold
+
+  int index;
+  int sum;
+  int count;
+  int under;
+
+  sum=0;
+  count=0;
+  under=0;
+  for(index=0;index<N;index++) {
+    if(values[index]!=NoData) {
+      if(values[index]<thres) {
+	sum++;
+	under=1;
+      }
+      else {
+	if ( under ) {
+	  count++;
+	  under=0;
+	}
+      }
+    }
+  }
+  
+  return ((double)sum/(double)count);
+
+}
+
 int get_consecutive_days_under_thres(double *values, double thres, int N, double NoData) {
   // computes the number of records under a threshold between first and last occurance identifeid from the middle of the record (e.g., growing sesason between first and last frost)
 
@@ -196,11 +256,11 @@ int get_consecutive_days_under_thres(double *values, double thres, int N, double
 
   for(first=N/2;first>=0;first--)
     if(values[first]!=NoData)
-      if(values[first]<thres) break;
+      if(values[first]>thres) break;
   
   for(last=N/2;last<N;last++)
     if(values[last]!=NoData)
-      if(values[last]<thres) break;
+      if(values[last]>thres) break;
   
   return (last-first);
 
