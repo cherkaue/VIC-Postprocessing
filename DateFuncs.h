@@ -1,6 +1,14 @@
 #ifndef DATEFUNCS
 #define DATEFUNCS
 
+/*********************************************************************
+  2017-Jun-05 Modified Days in Month to start with January equal to 
+    record 0.  Previously it started with Janusry equal to record 1.
+    This caused problems with get next/last day and hour commands, 
+    which assumed that January was index 0.  Should not be a problem
+    for month, season ot year stepping.                  KAC
+******************************************************************/
+
 // define leap year
 #ifndef _LEAPYR
 #define LEAPYR(y) (!((y)%400) || (!((y)%4) && ((y)%100)))
@@ -9,7 +17,7 @@
 // define calendar variables
 static char *SeasonNames[] = { "SPR", "SUM", "AUT", "WIN" };
 static char *MonthNames[] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
-static int   DaysInMonth[] = { 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+static int   DaysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 static int   SeasonNumbers[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2 };
 
 // date structure

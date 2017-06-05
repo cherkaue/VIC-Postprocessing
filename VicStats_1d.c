@@ -285,16 +285,18 @@ int get_first_day_over_thres(double *values, double thres, int N, double NoData,
 int get_first_day_over_thres_from_middle(double *values, double thres, int N, double NoData, DATE_STRUCT firstdate) {
   // find the first day value exceeds a threshold but start in the middle of the record (e.g. find first frost in calendar year)
 
-  int index;
+  int index, idx;
 
   for(index=N/2;index<N;index++) {
     if(values[index]!=NoData)
       if(values[index]>thres) break;
-    firstdate = get_next_day( firstdate );
   }
 
   if ( index == N ) return( (int)NoData );
-  else return ( calc_doy(firstdate) );
+  else {
+    for(idx=0;idx<index;idx++) firstdate = get_next_day( firstdate );
+    return ( calc_doy(firstdate) );
+  }
 
 }
 
@@ -317,16 +319,18 @@ int get_first_day_under_thres(double *values, double thres, int N, double NoData
 int get_first_day_under_thres_from_middle(double *values, double thres, int N, double NoData, DATE_STRUCT firstdate) {
   // find the first day value is below a threshold but start in the middle of the record (e.g. find first frost in calendar year)
 
-  int index;
+  int index, idx;
 
   for(index=N/2;index<N;index++) {
     if(values[index]!=NoData) 
       if(values[index]<thres) break;
-    firstdate = get_next_day( firstdate );
   }
   
   if ( index == N ) return( (int)NoData );
-  else return ( calc_doy(firstdate) );
+  else {
+    for(idx=0;idx<index;idx++) firstdate = get_next_day( firstdate );
+    return ( calc_doy(firstdate) );
+  }
 
 }
 
@@ -355,16 +359,18 @@ int get_last_day_over_thres(double *values, double thres, int N, double NoData, 
 int get_last_day_over_thres_from_middle(double *values, double thres, int N, double NoData, DATE_STRUCT firstdate) {
   // find the last day value is over a threshold but work back from the middle of the record (e.g. find last frost in calendar year)
 
-  int index;
+  int index, idx;
 
   for(index=N/2;index>=0;index--) {
     if(values[index]!=NoData)
       if(values[index]>thres) break;
-    firstdate = get_last_day( firstdate );
   }
   
   if ( index < 0 ) return( (int)NoData );
-  else return ( calc_doy(firstdate) );
+  else {
+    for(idx=0;idx<index;idx++) firstdate = get_next_day( firstdate );
+    return ( calc_doy(firstdate) );
+  }
 
 }
 
@@ -393,16 +399,19 @@ int get_last_day_under_thres(double *values, double thres, int N, double NoData,
 int get_last_day_under_thres_from_middle(double *values, double thres, int N, double NoData, DATE_STRUCT firstdate) {
   // find the last day value is over a threshold but work back from the middle of the record (e.g. find last frost in calendar year)
 
-  int index;
+  int index, idx;
 
   for(index=N/2;index>=0;index--) {
     if(values[index]!=NoData)
       if(values[index]<thres) break;
-    firstdate = get_last_day( firstdate );
   }
   
   if ( index < 0 ) return( (int)NoData );
-  else return ( calc_doy(firstdate) );
+  else {
+    for(idx=0;idx<index;idx++) 
+      firstdate = get_next_day( firstdate );
+    return ( calc_doy(firstdate) );
+  }
 
 }
 

@@ -40,7 +40,7 @@ int calc_doy( DATE_STRUCT self ) {
   // Routine to calculate the doy of the year for the given year, month, day and hour
   double juldate;
   juldate = calc_juldate( self.year, 1, 1, 0 );
-  return ( (int)(self.juldate-juldate) );
+  return ( (int)(self.juldate-juldate+1) );
 }
 
 DATE_STRUCT get_juldate( DATE_STRUCT self ) {
