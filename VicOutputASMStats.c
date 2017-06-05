@@ -1,9 +1,12 @@
 #include <VicStuff.h>
 
-int GetStatInfo( char *, StatInfoStruct *, char **, int );
+int GetStatInfo( char *, StatInfoStruct *, char **, int, int *, int *, int *, int * );
 int GetPenmanInfo( PenInfoStruct *, char **, int );
 int GetTotalRunoffInfo( PenInfoStruct *, char **, int );
-int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *, char **, int );
+int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int CalcModifiedGrowingDegreeDays( double *, double *, double *, DATE_STRUCT, int );
+int GetChillingHoursInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int CalcChillingHours( double *, double *, double *, DATE_STRUCT, int );
 DATE_STRUCT GetJulianDate(int, int, int, double);
 int CreateNewBlankArcInfoGridFiles ( char, char *, StatInfoStruct, char ***, 
 				     DATE_STRUCT, int, int, int, int, int, double, 
@@ -65,11 +68,20 @@ int main(int argc, char *argv[]) {
     compute the requested metric.  Period is defined with starting and
     ending month and day combinations, and data outside this range are
     set to NoData values before calculating annual metrics.      KAC
-  2017-05-30 Added Modified Gorwing Degree Day as an additional 
-    column to be calculated using input values, if availabile.  Based on
-    calculation of Total Runoff, if IN_TMAX and IN_TMIN are present.  
-    Value is not calcualted outside of the growing season, nor is it 
-    accumulated, so assumuated values can be obtained using "sum". KAC
+  2017-05-31 Added Chilling Hours and modified Growing Degree Days as 
+    variables that are computed before final statistics for each period.
+    This is different than PE and TOTAL_RUNOFF, which are computed as 
+    the variables are read from the input files.  These variables requried 
+    access to multiple columns of input data, not all of which were 
+    necessarily requested for processing, so tose variables had to be
+    read in and then calculations were made once the entire period was
+    ready for statistical analysis.                      KAC
+  2017-05-31 Modified first and last date functions to provide the day
+    of year (doy) rather than the number of days since the start of the 
+    analysis period.  This should provide results that are easier to 
+    assess and explain.                                    KAC
+  2017-05-31 Completed transition to supporting both ArcGIS grid and 
+    XYZ file output formats.  This had been left incomplete.  KAC
 
 ***********************************************************************/
 
@@ -140,6 +152,8 @@ int main(int argc, char *argv[]) {
   int     BinaryFile, lidx;
   int     CalcPE, CalcTR, CalcMGDD, CalcCH;
   int     periodyear[2];
+  
+  int     NumExtraCalcs=4; // Number of extra calculations possible, e.g., OUT_PE
 
   date      = (int *)calloc(NUM_DATE_VALS,sizeof(int));
 
@@ -221,7 +235,7 @@ int main(int argc, char *argv[]) {
 			   &ColAggTypes, &TimeStep, &NumLayers, &NumNodes, 
 			   &NumBands, &NumFrostFronts, &NumLakeNodes, 
 			   &NumCols, &NumBytes );
-  ColNames = (char **)realloc(ColNames,(NumCols+2)*sizeof(char *));
+  ColNames = (char **)realloc(ColNames,(NumCols+NumExtraCalcs)*sizeof(char *));
   // set OUT_PE as a column name
   ColNames[NumCols] = (char *)calloc( 7, sizeof(char) );
   strcpy( ColNames[NumCols], "OUT_PE" );
@@ -229,43 +243,66 @@ int main(int argc, char *argv[]) {
   ColNames[NumCols+1] = (char *)calloc( 17, sizeof(char) );
   strcpy( ColNames[NumCols+1], "OUT_TOTAL_RUNOFF" );
   // set OUT_MGDD as a column name
-  ColNames[NumCols+1] = (char *)calloc( 9, sizeof(char) );
-  strcpy( ColNames[NumCols+1], "OUT_MGDD" );
+  ColNames[NumCols+2] = (char *)calloc( 9, sizeof(char) );
+  strcpy( ColNames[NumCols+2], "OUT_MGDD" );
   // set OUT_CHILL_HR as a column name
-  ColNames[NumCols+1] = (char *)calloc( 13, sizeof(char) );
-  strcpy( ColNames[NumCols+1], "OUT_CHILL_HR" );
+  ColNames[NumCols+3] = (char *)calloc( 13, sizeof(char) );
+  strcpy( ColNames[NumCols+3], "OUT_CHILL_HR" );
   // check for hourly column in dataset
   if ( strcmp( ColNames[3], "HOUR" ) == 0 ) { // hour is present offset by one column
     OutStart = 4;
     VarList = &ColNames[OutStart];
-    NumOut  = NumCols - OutStart + 2;
+    NumOut  = NumCols - OutStart + NumExtraCalcs;
   }
   else { // hour is not present, do not offset daily data
     OutStart = 3;
     VarList = &ColNames[OutStart];
-    NumOut = NumCols - OutStart + 2;
+    NumOut = NumCols - OutStart + NumExtraCalcs;
   }
   data = (double *)calloc((NumOut+2),sizeof(double));
   gzclose(fin);
 
+  /// get statistic type
+  strcpy(TmpType,argv[8]);
+  StatType = TmpType[0];
+
   /** Read statistics control file **/
-  ErrNum = GetStatInfo( argv[5], &StatInfo, VarList, NumOut );
+  ErrNum = GetStatInfo( argv[5], &StatInfo, VarList, NumOut, &CalcPE, 
+			&CalcTR, &CalcMGDD, &CalcCH );
 
   /** Setup for calculation of PE **/
-  CalcPE = GetPenmanInfo( &PenInfo, VarList, NumOut );
+  if ( CalcPE )
+    CalcPE = GetPenmanInfo( &PenInfo, VarList, NumOut );
 
   /** Setup for calculation of total runoff (runoff + baseflow) **/
-  CalcTR = GetTotalRunoffInfo( &TRoffInfo, VarList, NumOut );
+  if ( CalcTR )
+    CalcTR = GetTotalRunoffInfo( &TRoffInfo, VarList, NumOut );
 
   /** Setup for calculation of modified growing degree day (Tmin and Tmax) **/
-  CalcMGDD = GetModifiedGrowingDegreeDayInfo( &MGDDInfo, VarList, NumOut );
+  if ( CalcMGDD )
+    if ( StatType == 'A' || StatType == 'P' )
+      CalcMGDD = GetModifiedGrowingDegreeDayInfo( &MGDDInfo, &StatInfo, VarList, NumOut );
+    else {
+      fprintf( stderr, "MGDD not computed because period must be annual.\n" );
+      CalcMGDD = 0;
+    }
 
-  /** Check that requests columns are in the given output files **/
+  /** Setup for calculation of chilling hours using Tmin and Tmax **/
+  if ( CalcCH )
+    if ( StatType == 'A' || StatType == 'P' ) {
+      CalcCH = GetChillingHoursInfo( &ChillHrInfo, &StatInfo, VarList, NumOut );
+    }
+    else {
+      fprintf( stderr, "Chilling Hours not computed because period must be annual.\n" );
+      CalcCH = 0;
+    }
+
+  /** Check that requested columns are in the given output files **/
   for ( didx=NumOut-1; didx>=0; didx-- ) {
-    for( cidx=0; cidx<NumCols+2; cidx++ ) {
+    for( cidx=0; cidx<NumCols+NumExtraCalcs; cidx++ ) {
       if ( strcasecmp( ColNames[cidx], VarList[didx] ) == 0 ) break;
     }
-    if ( cidx >= NumCols+2 ) {
+    if ( cidx >= NumCols+NumExtraCalcs ) {
       fprintf( stderr, "WARNING: Unable to find output column %s in the given output files, will remove from analysis, check the VIC model output file header to determine what variables are in the file %s.\n", VarList[didx], filename );
       for( cidx=didx; cidx<NumOut-1; cidx++ )
 	VarList[cidx] = VarList[cidx+1]; // remove missing statistic
@@ -289,8 +326,6 @@ int main(int argc, char *argv[]) {
   enddate           = get_season(enddate);
   
   // Process statistic type - adjust start and end date to encompass full periods
-  strcpy(TmpType,argv[8]);
-  StatType = TmpType[0];
   if ( StatType == 'A' ) {
     // Annual statistics
     if ( enddate.month == startdate.month && enddate.day == startdate.day )
@@ -458,17 +493,22 @@ int main(int argc, char *argv[]) {
     If not overwriting file validate previous files
   ***************************************************/
   if ( !OVERWRITE ) 
-    if ( ArcGrid )
-      OVERWRITE = CheckExistingArcInfoGridFiles ( StatType, GridName, StatInfo, 
-						  GridFileName, startdate, 0,
-						  0, &nrow, &ncol, &minlat,
-						  &minlng, &cellsize, &NODATA );
-    else
-      // make sure that row equals number of files, while col is always 1
-      OVERWRITE = CheckExistingXyzFiles ( StatType, GridName, StatInfo, 
-					  GridFileName, startdate, 0,
-					  0, &nrow, &ncol, &minlat,
-					  &minlng, &cellsize, &NODATA );
+    for( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
+      if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
+	if ( ArcGrid )
+	  OVERWRITE = CheckExistingArcInfoGridFiles ( StatType, GridName, 
+						      StatInfo, GridFileName, 
+						      startdate, 0, 0, &nrow, 
+						      &ncol, &minlat, &minlng, 
+						      &cellsize, &NODATA );
+	else
+	  // make sure that row equals number of files, while col is always 1
+	  OVERWRITE = CheckExistingXyzFiles ( StatType, GridName, StatInfo, 
+					      GridFileName, startdate, 0,
+					      0, &nrow, &ncol, &minlat,
+					      &minlng, &cellsize, &NODATA );
+      }
+    }
 
   GridLat = (double *)calloc(nrow, sizeof(double));
   GridLng = (double *)calloc(ncol, sizeof(double));
@@ -499,24 +539,26 @@ int main(int argc, char *argv[]) {
   // Build blank files for overall statistics
   for ( sidx = 0; sidx < SumSets; sidx++ ) {
     for( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-      if ( ArcGrid )
-	// Going to output statistics as an ArcInfo grid
-	ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						StatInfo, GridFileName,
-						nextdate, NumSets+sidx, cidx, 
-						NumSets, nrow, ncol, 
-						minlat, minlng,
-						cellsize, NODATA, 
-						OVERWRITE);
-      else
-	// Output to an ASCII XYZ file
-	ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
-					StatInfo, GridFileName,
-					nextdate, NumSets+sidx, cidx, 
-					NumSets, nrow, ncol, 
-					minlat, minlng,
-					cellsize, NODATA, 
-					OVERWRITE);
+      if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
+	if ( ArcGrid )
+	  // Going to output statistics as an ArcInfo grid
+	  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
+						  StatInfo, GridFileName,
+						  nextdate, NumSets+sidx, cidx, 
+						  NumSets, nrow, ncol, 
+						  minlat, minlng,
+						  cellsize, NODATA, 
+						  OVERWRITE);
+	else
+	  // Output to an ASCII XYZ file
+	  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+					  StatInfo, GridFileName,
+					  nextdate, NumSets+sidx, cidx, 
+					  NumSets, nrow, ncol, 
+					  minlat, minlng,
+					  cellsize, NODATA, 
+					  OVERWRITE);
+      }
     }
     if ( StatType == 'A' ) nextdate = get_next_year( nextdate );
     else if ( StatType == 'S' ) nextdate = get_next_season( nextdate );
@@ -676,7 +718,7 @@ int main(int argc, char *argv[]) {
       // read date from current line
       ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
 			       ColMults, date, data, NumCols, NumOut, &OutStart, 
-			       CalcPE, PenInfo, CalcTR, TRoffInfo, CalcMGDD, MGDDInfo );
+			       CalcPE, PenInfo, CalcTR, TRoffInfo );
       
       // reset to correct ASCII position before processing
       if ( !BinaryFile ) RawPtr = 0; 
@@ -694,7 +736,7 @@ int main(int argc, char *argv[]) {
 	if ( tmpdate.juldate >= startdate.juldate && sidx == NODATA ) {
 	  // Initialize date accounting for new grid cell
 	  sidx = 0;
-	  lastdate.juldate = startdate.juldate;
+	  lastdate = copy_date( startdate );
 	  if ( StatType == 'A' ) nextdate = get_next_year( startdate );
 	  else if ( StatType == 'S' ) nextdate = get_next_season( startdate );
 	  else if ( StatType == 'M' ) nextdate = get_next_month( startdate );
@@ -705,14 +747,26 @@ int main(int argc, char *argv[]) {
 	  nextdate = get_juldate( nextdate );
 	  // Create output file names and initialize grid files
 	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-	    if ( filenum == 0 && PrtAllGrids ) {
-	      ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						      StatInfo, GridFileName,
-						      startdate, sidx, cidx, 
-						      NumSets, nrow, ncol, 
-						      minlat, minlng,
-						      cellsize, NODATA, 
-						      OVERWRITE);
+	    if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
+	      if ( filenum == 0 && PrtAllGrids ) {
+		if ( ArcGrid )
+		  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
+							  StatInfo, GridFileName,
+							  startdate, sidx, cidx, 
+							  NumSets, nrow, ncol, 
+							  minlat, minlng,
+							  cellsize, NODATA, 
+							  OVERWRITE);
+		else
+		  // Output to an ASCII XYZ file
+		  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+						  StatInfo, GridFileName,
+						  startdate, sidx, cidx, 
+						  NumSets, nrow, ncol, 
+						  minlat, minlng,
+						  cellsize, NODATA, 
+						  OVERWRITE);
+	      }
 	    }
 	    // Initialize daily statistic storage variables for each new grid cell
 	    for ( didx = 0; didx < 366; didx++ ) {
@@ -724,6 +778,30 @@ int main(int argc, char *argv[]) {
 	else if ( tmpdate.juldate >= nextdate.juldate && sidx >= 0 ) {
 	  // process next set (annual, seasonal, monthly, etc) of data
 	  Nvals = (int)(nextdate.juldate+0.5)-(int)(lastdate.juldate+0.5);
+	  // calculate modified growing degree days, if possible
+	  if ( CalcMGDD ) {
+	    CalcModifiedGrowingDegreeDays( gridval[MGDDInfo.ColNumList[2]], 
+					   gridval[MGDDInfo.ColNumList[0]], 
+					   gridval[MGDDInfo.ColNumList[1]], 
+					   lastdate, Nvals );
+	    for ( cidx = 1; cidx < MGDDInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[MGDDInfo.OutputCols[cidx]][didx] 
+		  = gridval[MGDDInfo.ColNumList[2]][didx];
+	  }
+	  // calculate chilling hours, if possible
+	  if ( CalcCH ) {
+	    CalcChillingHours( gridval[ChillHrInfo.ColNumList[2]], 
+			       gridval[ChillHrInfo.ColNumList[0]], 
+			       gridval[ChillHrInfo.ColNumList[1]], 
+			       lastdate, Nvals );
+	    for ( cidx = 1; cidx < ChillHrInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[ChillHrInfo.OutputCols[cidx]][didx] 
+		  = gridval[ChillHrInfo.ColNumList[2]][didx];
+	  }
 	  // now process all requested output statistics
 	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
 	    // Check is processing annual periods
@@ -769,35 +847,35 @@ int main(int argc, char *argv[]) {
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldayo", 5 ) == 0 ) {
 	      // find the last day a value is over a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldayu", 5 ) == 0 ) {
 	      // find the last day a value is under a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdayo", 5 ) == 0 ) {
 	      // find the first day a value is over a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdayu", 5 ) == 0 ) {
 	      // find the first day a value is under a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldaymido", 8 ) == 0 ) {
 	      // find the last day a value is over a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldaymidu", 8 ) == 0 ) {
 	      // find the last day a value is under a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdaymido", 8 ) == 0 ) {
 	      // find the first day a value is over a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdaymidu", 8 ) == 0 ) {
 	      // find the first day a value is under a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "crossthres", 10 ) == 0 ) {
 	      // count the number of times a threshold is crossed
@@ -840,12 +918,24 @@ int main(int argc, char *argv[]) {
 	      GridValues[sidx][cidx][row][col] = get_mean(gridval[cidx], Nvals, (double)NODATA );
 	    // Create and initialize output file name for next increment
 	    if ( filenum == 0 && tmpdate.juldate < enddate.juldate && PrtAllGrids ) {
-	      ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						      StatInfo, GridFileName,
-						      nextdate, sidx+1, cidx, 
-						      NumSets, nrow, ncol, minlat, minlng,
-						      cellsize, NODATA, 
-						      OVERWRITE);
+	      if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
+		if ( ArcGrid )
+		  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
+							  StatInfo, GridFileName,
+							  nextdate, sidx+1, cidx, 
+							  NumSets, nrow, ncol, minlat, minlng,
+							  cellsize, NODATA, 
+							  OVERWRITE);
+		else
+		  // Output to an ASCII XYZ file
+		  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+						  StatInfo, GridFileName,
+						  nextdate, sidx+1, cidx, 
+						  NumSets, nrow, ncol, 
+						  minlat, minlng,
+						  cellsize, NODATA, 
+						  OVERWRITE);
+	      }
 	    }
 	    // Initialize daily statistic storage variables for each new grid cell
 	    for ( didx = 0; didx < 366; didx++ ) {
@@ -855,7 +945,7 @@ int main(int argc, char *argv[]) {
 	  Nrec = 0;
 	  // Update Date Information
 	  sidx++;
-	  lastdate.juldate = nextdate.juldate;
+	  lastdate = copy_date( nextdate );
 	  if ( StatType == 'A' ) nextdate = get_next_year( nextdate );
 	  else if ( StatType == 'S' ) nextdate = get_next_season( nextdate );
 	  else if ( StatType == 'M' ) nextdate = get_next_month( nextdate );
@@ -891,7 +981,7 @@ int main(int argc, char *argv[]) {
 	  ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, 
 				   ColTypes, ColMults, date, data, NumCols, 
 				   NumOut, &OutStart, CalcPE, PenInfo, CalcTR, 
-				   TRoffInfo, CalcMGDD, MGDDInfo );
+				   TRoffInfo );
 	  
 	  if ( ErrNum >= 0 ) {
 	    // compute julian day of current record
@@ -939,39 +1029,43 @@ int main(int argc, char *argv[]) {
 
   for ( cidx = 0; cidx < StatInfo.Ncols; cidx ++ ) {
 
-    // Plot individual time period grids
-    if ( PrtAllGrids ) {
-      for ( sidx = 0; sidx < NumSets; sidx++ )
-	ErrNum = write_arcinfo_grid(GridFileName[sidx][cidx], 
-				    GridValues[sidx][cidx], GridLat, GridLng, 
-				    ncol, nrow, minlat, minlng, cellsize, 
-				    NODATA, Ncells);
-    }
+    if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
 
-    // Compute average for all time periods
-    for ( sumidx = 0; sumidx < SumSets; sumidx++ ) {
-      for ( row = 0; row < nrow; row++ ) {
-	for ( col = 0; col < ncol; col++ ) {
-	  if ( GridValues[0][cidx][row][col] == NODATA ) {
-	    // no values present, set to no data value
-	    OutGrid[row][col] = NODATA;
-	  }
-	  else {
+      // Plot individual time period grids
+      if ( PrtAllGrids ) {
+	for ( sidx = 0; sidx < NumSets; sidx++ )
+	  ErrNum = write_arcinfo_grid(GridFileName[sidx][cidx], 
+				      GridValues[sidx][cidx], GridLat, GridLng, 
+				      ncol, nrow, minlat, minlng, cellsize, 
+				      NODATA, Ncells);
+      }
+
+      // Compute average for all time periods
+      for ( sumidx = 0; sumidx < SumSets; sumidx++ ) {
+	for ( row = 0; row < nrow; row++ ) {
+	  for ( col = 0; col < ncol; col++ ) {
 	    // compute average value
 	    OutGrid[row][col] = ValCnt = 0;
 	    for ( sidx = sumidx; sidx < NumSets; sidx+=SumSets ) {
-	      OutGrid[row][col] += GridValues[sidx][cidx][row][col];
-	      ValCnt++;
+	      if ( fabs( GridValues[sidx][cidx][row][col] - NODATA ) > SMALL_CHK_VAL ) {
+		OutGrid[row][col] += GridValues[sidx][cidx][row][col];
+		ValCnt++;
+	      }
 	    }
-	    OutGrid[row][col] /= (double)ValCnt;
+	    if ( ValCnt == 0 )
+	      // no values present, set to no data value
+	      OutGrid[row][col] = NODATA;
+	    else
+	      // otherwise store the average value
+	      OutGrid[row][col] /= (double)ValCnt;
 	  }
 	}
-      }
 
-      // Update Grid file for current value
-      ErrNum = write_arcinfo_grid(GridFileName[NumSets+sumidx][cidx], OutGrid, 
-				  GridLat, GridLng, ncol, nrow, minlat, 
-				  minlng, cellsize, NODATA, Ncells);
+	// Update Grid file for current value
+	ErrNum = write_arcinfo_grid(GridFileName[NumSets+sumidx][cidx], 
+				    OutGrid, GridLat, GridLng, ncol, nrow, 
+				    minlat, minlng, cellsize, NODATA, Ncells);
+      }
     }
   }
 
@@ -979,9 +1073,12 @@ int main(int argc, char *argv[]) {
 
 }
 
-int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo, char **ColNames, int NumCols ) {
+int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo, 
+		 char **ColNames, int NumCols, int *CalcPE, 
+		 int *CalcTR, int *CalcMGDD, int *CalcCH ) {
 
   // Modified 2008-May-13 to remove column number from input file.
+  // modifeid 2017-May-31 to add flags for additional calculations.
 
   FILE *fin;
   int cidx, idx, tidx, Ncols;
@@ -1024,7 +1121,7 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo, char **ColNames,
       // need to get the threshold value
       sscanf( tmpstr, "%*s %*s %f", &StatInfo->Thres[cidx] ); 
       // add it to the statistic name so that output files can be differentiated
-      sprintf( StatInfo->ColStatList[cidx], "%s_%.2g", StatInfo->ColStatList[cidx], StatInfo->Thres[cidx] );
+      sprintf( StatInfo->ColStatList[cidx], "%s_%g", StatInfo->ColStatList[cidx], StatInfo->Thres[cidx] );
     }
     for ( idx = 0; idx < NumCols; idx++ ) {
       if ( strcasecmp( ColNames[idx], StatInfo->ColNameList[cidx] ) == 0 ) {
@@ -1050,6 +1147,19 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo, char **ColNames,
   fclose(fin);
   StatInfo->UseColFile = TRUE;
   StatInfo->Ncols -= Ncols;
+
+  // check if any special calculations have been requested
+  (*CalcPE) = (*CalcTR) = (*CalcMGDD) = (*CalcCH) = FALSE;
+  for ( cidx = StatInfo->Ncols-1; cidx >= 0; cidx-- ) {
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_PE" ) == 0 ) 
+      (*CalcPE) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_TOTAL_RUNOFF" ) == 0 ) 
+      (*CalcTR) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_MGDD" ) == 0 ) 
+      (*CalcMGDD) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_CHILL_HR" ) == 0 ) 
+      (*CalcCH) = TRUE;
+  }
 
   return(0);
 }
@@ -1131,41 +1241,234 @@ int GetTotalRunoffInfo( PenInfoStruct *TRoffInfo, char **ColNames, int NumCols )
   return (TRUE);
 }
 
-int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *MGDDInfo, char **ColNames, int NumCols ) {
-
-  // Modified 2017-May-30 copied from GetTotalRunoffInfo.
+int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *MGDDInfo, StatInfoStruct *StatInfo, char **ColNames, int NumCols ) {
+  /* Modified 2017-May-30 copied from GetTotalRunoffInfo, then modified to 
+     search through StatInfo table first to determine is the required
+     variable is already being stored for other statistics.  If not, then 
+     it is added to StatInfoStruct so that it is available for later use. */
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
   static char *MGDDList[] = { "IN_TMIN", "IN_TMAX", "OUT_MGDD" };
 
-  int cidx, idx;
+  int cidx, sidx, idx;
 
   // Determine columns to be processed
   MGDDInfo->Ncols = 3;
   MGDDInfo->ColNumList  = (int *)calloc(MGDDInfo->Ncols,sizeof(int));
   MGDDInfo->ColNameList = (char **)calloc(MGDDInfo->Ncols,sizeof(char *));
   MGDDInfo->MaxColNum   = -9;
- 
- for ( cidx = 0; cidx < MGDDInfo->Ncols; cidx++ ) {
-   MGDDInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
-   strcpy( MGDDInfo->ColNameList[cidx], MGDDList[cidx] );
-   for ( idx = 0; idx < NumCols; idx++ ) {
-     if ( strcasecmp( ColNames[idx], MGDDInfo->ColNameList[cidx] ) == 0 ) {
-       MGDDInfo->ColNumList[cidx] = idx;
-       break;
-     }
-   }
-   if ( idx == NumCols ) {
-      // handle missing column by turning off calculation
-      fprintf( stderr, "Columns required for Modified Growing Degree Day calculation not found, so will not be computed.\n" );
-      MGDDInfo->Ncols = 0;
-      return (FALSE);
-   }
-   if ( MGDDInfo->ColNumList[cidx] > MGDDInfo->MaxColNum ) 
+
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < MGDDInfo->Ncols; cidx++ ) {
+    MGDDInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( MGDDInfo->ColNameList[cidx], MGDDList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], MGDDInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      MGDDInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], MGDDInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Modified Growing Degree Day calculation not found, so will not be computed.\n" );
+	MGDDInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], MGDDInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      MGDDInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( MGDDInfo->ColNumList[cidx] > MGDDInfo->MaxColNum ) 
       MGDDInfo->MaxColNum = MGDDInfo->ColNumList[cidx]+1;
   }
 
+  // check is the calculated statistics is in Statinfo more than once
+  MGDDInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  MGDDInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], MGDDInfo->ColNameList[MGDDInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      MGDDInfo->OutputCols[MGDDInfo->Noutput] = sidx;
+      MGDDInfo->Noutput++;
+    }
+  }
+
   return (TRUE);
+
+}
+
+int CalcModifiedGrowingDegreeDays( double *MGDD, double *TMIN, double *TMAX, DATE_STRUCT startdate, int Nvals ) {
+  // Modified Growing Degree Day based on the default method calculated
+  // by the Midwest Regional Climate Center (MRCC) as of May 2017
+  // Source: mrcc.isws.illinois.edu/cliwatch/mgdd/
+  // Based on critical temperature of 50F for corn and soybean
+  int didx;
+  double tmpTMIN, tmpTMAX;
+  double tmpStartJulDate, tmpEndJulDate;
+  double BaseT = 50.;
+
+  tmpStartJulDate = calc_juldate( startdate.year, 4, 1, 0 );
+  tmpEndJulDate = calc_juldate( startdate.year, 12, 1, 0 );
+  for ( didx = 0; didx < Nvals; didx++ ) {
+    // initialize MGDD
+    if ( didx == 0 ) MGDD[didx] = 0;
+    else MGDD[didx] = MGDD[didx-1];
+    // process MGDD within the growing season
+    if ( startdate.juldate + didx >= tmpStartJulDate 
+	 && startdate.juldate + didx < tmpEndJulDate ) {
+      // within the valid season, so convert temps to degree F
+      tmpTMIN = ( TMIN[didx] * 9. ) / 5. + 32.;
+      tmpTMAX = ( TMAX[didx] * 9. ) / 5. + 32.;
+      // check for temperature extremes that exceed calculation range
+      if ( tmpTMAX < BaseT ) tmpTMAX = BaseT;
+      if ( tmpTMIN < BaseT ) tmpTMIN = BaseT;
+      if ( tmpTMIN > 86. ) tmpTMIN = 86.;
+      if ( tmpTMAX > 86. ) tmpTMAX = 86.;
+      // calculate current MGDD
+      MGDD[didx] += (tmpTMAX + tmpTMIN) / 2. - BaseT;
+    }
+  }
+
+  return 1;
+
+}
+
+int GetChillingHoursInfo( PenInfoStruct *ChillHrInfo, StatInfoStruct *StatInfo, char **ColNames, int NumCols ) {
+  /* Modified 2017-May-30 copied from GetTotalRunoffInfo, then modified to 
+     search through StatInfo table first to determine is the required
+     variable is already being stored for other statistics.  If not, then 
+     it is added to StatInfoStruct so that it is available for later use. */
+
+  // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
+  static char *ChillHrList[] = { "IN_TMIN", "IN_TMAX", "OUT_CHILL_HR" };
+
+  int cidx, sidx, idx;
+
+  // Determine columns to be processed
+  ChillHrInfo->Ncols = 3;
+  ChillHrInfo->ColNumList  = (int *)calloc(ChillHrInfo->Ncols,sizeof(int));
+  ChillHrInfo->ColNameList = (char **)calloc(ChillHrInfo->Ncols,sizeof(char *));
+  ChillHrInfo->MaxColNum   = -9;
+ 
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < ChillHrInfo->Ncols; cidx++ ) {
+    ChillHrInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( ChillHrInfo->ColNameList[cidx], ChillHrList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], ChillHrInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      ChillHrInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], ChillHrInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Chilling Hour calculation not found, so will not be computed.\n" );
+	ChillHrInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], ChillHrInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      ChillHrInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( ChillHrInfo->ColNumList[cidx] > ChillHrInfo->MaxColNum ) 
+      ChillHrInfo->MaxColNum = ChillHrInfo->ColNumList[cidx]+1;
+ }
+ 
+  // check is the calculated statistics is in Statinfo more than once
+  ChillHrInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  ChillHrInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], ChillHrInfo->ColNameList[ChillHrInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      ChillHrInfo->OutputCols[ChillHrInfo->Noutput] = sidx;
+      ChillHrInfo->Noutput++;
+    }
+  }
+
+ return (TRUE);
+
+}
+
+int CalcChillingHours( double *ChillHr, double *TMIN, double *TMAX, DATE_STRUCT startdate, int Nvals ) {
+  // Calculate chilling hours based on equation provided by 
+  // Janna Beckerman for the INCCIA 2017 report.
+  int didx, hidx;
+  double tmpTMIN, tmpTMAX;
+  double tmpStartJulDate, tmpEndJulDate;
+  double *tmpTair;
+
+  // estimate hourly temperatures based on sawtooth method (Sanders, 1975)
+  // assumes TMIN occurs at 0500 and TMAX at 1500 and temperature change 
+  // is linear between those extremes.
+  tmpTair = (double *)calloc(Nvals*24,sizeof(double));
+  for ( didx=0; didx<Nvals; didx++ ) {
+    for( hidx=0; hidx<5; hidx++ ) {
+      // fill in evening to morning minimum
+      if ( didx == 0 ) tmpTair[didx*24+hidx] = TMIN[didx];
+      else tmpTair[didx*24+hidx] = ((double)hidx-29.)/(15.-29.)*(TMAX[didx-1]-TMIN[didx])+TMIN[didx];
+    }
+    tmpTair[didx*24+5]=TMIN[didx]; // set minimum temperature
+    for ( hidx=6; hidx<15; hidx++ ) {
+      // fill in daily temperature increase
+      tmpTair[didx*24+hidx] = ((double)hidx-15.)/(5.-15.)*(TMIN[didx]-TMAX[didx])+TMAX[didx];
+    }
+    tmpTair[didx*24+15]=TMAX[didx]; // set maximum temperature
+    for( hidx=16; hidx<24; hidx++ ) {
+      // fill in afternoon to evening temperatures
+      if ( didx == Nvals-1 ) tmpTair[didx*24+hidx] = TMAX[didx];
+      else tmpTair[didx*24+hidx] = ((double)hidx-29.)/(15.-29.)*(TMAX[didx]-TMIN[didx+1])+TMIN[didx+1];
+    }    
+  }
+
+  // Compute chilling hours per day
+  for ( didx=0; didx<Nvals; didx++ ) {
+    ChillHr[didx] = 0;
+    for ( hidx=0; hidx<24; hidx++ ) {
+      // convert temps to degree F
+      tmpTair[didx*24+hidx] = ( tmpTair[didx*24+hidx] * 9. ) / 5. + 32.;
+      // compute chilling hours
+      if ( tmpTair[didx*24+hidx] >= 35. && tmpTair[didx*24+hidx] <= 45 )
+	ChillHr[didx]++;
+    }
+    if ( didx>0 ) ChillHr[didx] += ChillHr[didx-1];
+  }
+
+  free(tmpTair);
+
+  return 1;
+
 }
 
 int CreateNewBlankArcInfoGridFiles ( char StatType,

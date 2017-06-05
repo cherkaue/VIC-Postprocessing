@@ -36,6 +36,13 @@ double calc_juldate(int year,
 
 }
 
+int calc_doy( DATE_STRUCT self ) {
+  // Routine to calculate the doy of the year for the given year, month, day and hour
+  double juldate;
+  juldate = calc_juldate( self.year, 1, 1, 0 );
+  return ( (int)(self.juldate-juldate) );
+}
+
 DATE_STRUCT get_juldate( DATE_STRUCT self ) {
   // Routine to calculate julian date for the given year, month, day and hour
   self.juldate = calc_juldate( self.year, self.month, self.day, self.hour );
@@ -254,5 +261,22 @@ DATE_STRUCT get_next_season_start( DATE_STRUCT self ) {
   self.day = 1;
   self = get_juldate( self );
   return ( self );
+}
+
+DATE_STRUCT copy_date( DATE_STRUCT self ) {
+  // creates copy of given date structure
+  DATE_STRUCT new_date;
+
+  new_date.day     = self.day;
+  new_date.month   = self.month;
+  new_date.year    = self.year;
+  new_date.season  = self.season;
+  new_date.doy     = self.doy;
+  new_date.rec     = self.rec;
+  new_date.hour    = self.hour;
+  new_date.juldate = self.juldate;
+
+  return ( new_date );
+
 }
 

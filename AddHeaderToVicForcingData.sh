@@ -66,7 +66,7 @@ else
   # update variable list for new columns
     # if daily data, add IN_TAVG
   if [ "$TMAX" -ge 0 ] && [ "$TMIN" -ge 0 ] && [ "$DT" -eq 24 ]; then # need to identify columns with IN_TMAX and IN_TMIN
-      Nvar=$Nvar+1
+      Nvar=$((Nvar+1))
       VarNames[$Nvar]="IN_TAVG"
   fi
 
@@ -79,7 +79,7 @@ else
 	  VarNames[1]=YEAR
 	  VarNames[2]=MONTH
 	  VarNames[3]=DAY
-	  Nvar=$Nvar+3
+	  Nvar=$((Nvar+3))
       else
 	  for ((idx=$Nvar;idx > 0; idx--)) {
 	      VarNames[$idx+4]=${VarNames[$idx]}
@@ -88,7 +88,7 @@ else
 	  VarNames[2]=MONTH
 	  VarNames[3]=DAY
 	  VarNames[4]=DAY
-	  Nvar=$Nvar+4
+	  Nvar=$((Nvar+4))
       fi
   fi
 

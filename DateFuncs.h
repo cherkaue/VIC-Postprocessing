@@ -1,3 +1,6 @@
+#ifndef DATEFUNCS
+#define DATEFUNCS
+
 // define leap year
 #ifndef _LEAPYR
 #define LEAPYR(y) (!((y)%400) || (!((y)%4) && ((y)%100)))
@@ -38,4 +41,8 @@ DATE_STRUCT get_next_year( DATE_STRUCT self );
 DATE_STRUCT get_last_year( DATE_STRUCT self );
 DATE_STRUCT get_next_month_start( DATE_STRUCT self );
 DATE_STRUCT get_next_season_start( DATE_STRUCT self );
+DATE_STRUCT copy_date( DATE_STRUCT self );
 double calc_juldate( int, int, int, double );
+int calc_doy( DATE_STRUCT self );
+
+#endif // define date functions
