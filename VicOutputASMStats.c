@@ -1,30 +1,38 @@
 #include <VicStuff.h>
 
-int GetStatInfo( char *, StatInfoStruct *, char **, int, int *, int *, int *, int * );
+// get information from the staistics control file
+int GetStatInfo( char *, StatInfoStruct *, char **, int, int *, int *, int *, int *, char, double *, double *, int, int, double, double, double, int );
+// get special information for calculating supplemental output variables
 int GetPenmanInfo( PenInfoStruct *, char **, int );
 int GetTotalRunoffInfo( PenInfoStruct *, char **, int );
 int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
-int CalcModifiedGrowingDegreeDays( double *, double *, double *, DATE_STRUCT, int );
 int GetChillingHoursInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+// Functions for computing supplemental output variables
+int CalcModifiedGrowingDegreeDays( double *, double *, double *, DATE_STRUCT, int );
 int CalcChillingHours( double *, double *, double *, DATE_STRUCT, int );
-DATE_STRUCT GetJulianDate(int, int, int, double);
-int CreateNewBlankArcInfoGridFiles ( char, char *, StatInfoStruct, char ***, 
-				     DATE_STRUCT, int, int, int, int, int, double, 
-				     double, double, int, char );
-int CreateNewBlankXyzFiles ( char, char *, StatInfoStruct, char ***, 
-			     DATE_STRUCT, int, int, int, int, int, double, 
-			     double, double, int, char );
+// File handling routines
+char CheckExistingOutputFiles ( char, char, char *, StatInfoStruct, char ***, 
+				DATE_STRUCT, int, int, int, int, int, 
+				double, double, double, int, int, char );
 char CheckExistingArcInfoGridFiles ( char, char *, StatInfoStruct, char ***, 
 				     DATE_STRUCT, int, int, int *, int *, 
 				     double *, double *, double *, int * );
 char CheckExistingXyzFiles ( char, char *, StatInfoStruct, char ***, DATE_STRUCT,
 			     int, int, int *, int *, double *, double *, double *,
 			     int * );
-int read_arcinfo_grid(char *, double *, double *, int *, int *, double *, 
-		      double *, double *, int *, double **);
+int read_arcinfo_grid(char *, double **, double **, int *, int *, double *, 
+		      double *, double *, int *, double ***);
 int write_arcinfo_grid(char *, double **, double *, double *, int, int, double, 
 		       double, double, int, int);
 int write_blank_arcinfo_grid(char *, int, int, double, double, double, int);
+int WriteOutputFiles ( char, char *, double **, double *, double *,
+		       int, int, double, double, double, int, int, char );
+int WriteXyzFiles( char *, double **, double *, double *, int, int,
+		   double, double, double, int, int );
+int ReadXyzFiles(char *, double **, double **, int *, int *, double *, 
+		      double *, double *, int *, double ***);
+int ReadOutputFiles ( char, char *, double **, double *, double *, int,
+		      int, double, double, double, int);
 
 int main(int argc, char *argv[]) {
 /************************************************************************
@@ -82,6 +90,11 @@ int main(int argc, char *argv[]) {
     assess and explain.                                    KAC
   2017-05-31 Completed transition to supporting both ArcGIS grid and 
     XYZ file output formats.  This had been left incomplete.  KAC
+  2017-06-12 Added the ability to define an input file rather than a 
+    constant value for the threshold.    KAC
+
+  NOTE: As of 2017-Jun-12 - Support for XYZ files has not been checked.  KAC
+  NOTE: As of 2017-Jun-12 - Support for no Overwrite is not completed.  KAC
 
 ***********************************************************************/
 
@@ -105,9 +118,9 @@ int main(int argc, char *argv[]) {
   int filenum;
   int Nfile;
   int row;
-  int nrow;
+  int nrows;
   int col;
-  int ncol;
+  int ncols;
   int cidx, didx;
   int DONE, LAST;
   int Nrec;
@@ -174,12 +187,15 @@ int main(int argc, char *argv[]) {
     exit(0);
   }
 
-  // Read grid cell file list and create template for ArcInfo grid file
+  /********************************
+    Read grid cell file list and create template for output files
+  ********************************/
   if((flist=fopen(argv[1],"r"))==NULL) {
     fprintf(stderr,"ERROR: Unable to open file list %s.\n",argv[1]);
     exit(0);
   }
   Nfile=0;
+  // find extent of spatial coverage
   fscanf(flist,"%*s %lf %lf",&tmplat,&tmplng);
   maxlat = minlat = tmplat;
   maxlng = minlng = tmplng;
@@ -193,28 +209,40 @@ int main(int argc, char *argv[]) {
   }
   Nfile++;
   rewind(flist);
-
+  // check if output file is in arcgrid format
   if ( strcasecmp( argv[2], "TRUE" ) == 0 ) ArcGrid = TRUE;
   else ArcGrid = FALSE;
-
+  // check output file cellsize
   if ( ( cellsize = atof(argv[4]) ) <= 0 ) {
     fprintf(stderr, "ERROR: Cell size (%f) must be a positive doubling value!\n\n", cellsize);
     return(-1);
   }
-
-  maxlat += cellsize / 2.;
-  minlat -= cellsize / 2.;
-  maxlng += cellsize / 2.;
-  minlng -= cellsize / 2.;
-
-  nrow = (int)((maxlat - minlat) / cellsize);
-  ncol = (int)((maxlng - minlng) / cellsize);
-  Ncells = nrow*ncol;
-  if ( nrow == 1 || ncol == 1 ) {
-    fprintf( stderr, "WARNING: Defined cells are at best one-dimensions with %i rows and %i columns.  If you are expecting a raster output, then double check your file list format.\n", nrow, ncol );
+  if ( ArcGrid ) {
+    // compute latitude and longitude limits
+    maxlat += cellsize / 2.;
+    minlat -= cellsize / 2.;
+    maxlng += cellsize / 2.;
+    minlng -= cellsize / 2.;
+    // estimate number of rows and columns
+    nrows = (int)((maxlat - minlat) / cellsize);
+    ncols = (int)((maxlng - minlng) / cellsize);
+    Ncells = nrows*ncols;
+    // check that input file list has spatial extent
+    if ( nrows == 1 || ncols == 1 ) {
+      fprintf( stderr, "WARNING: Defined cells are at best one-dimensional with %i rows and %i columns.  If you are expecting a raster output, then double check your file list format.\n", nrows, ncols );
+    }
+  }
+  else {
+    // Using XYZ file, so adjust nrows and ncols to reflect number of cells 
+    // being processed
+    nrows = Nfile;
+    ncols = 1;
+    Ncells = Nfile;
   }
 
-  // Setup input and output directories
+  /*****************************
+    Setup input and output directories
+  *****************************/
   strcpy(GridName,argv[3]);
 
   /** Build temporary flux file name and open to read header information **/
@@ -262,13 +290,18 @@ int main(int argc, char *argv[]) {
   data = (double *)calloc((NumOut+2),sizeof(double));
   gzclose(fin);
 
+  /****************************
+    Work on determining statistics to be computed 
+  ****************************/
   /// get statistic type
   strcpy(TmpType,argv[8]);
   StatType = TmpType[0];
 
   /** Read statistics control file **/
   ErrNum = GetStatInfo( argv[5], &StatInfo, VarList, NumOut, &CalcPE, 
-			&CalcTR, &CalcMGDD, &CalcCH );
+			&CalcTR, &CalcMGDD, &CalcCH, ArcGrid, GridLat, 
+			GridLng, nrows, ncols, minlat, minlng, cellsize, 
+			NODATA );
 
   /** Setup for calculation of PE **/
   if ( CalcPE )
@@ -310,14 +343,18 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Initialize dates
+  /**********************************
+     Initialize date structure
+  **********************************/
+
+  // get start date
   startdate.month   = (int)(atof(argv[6])/1000000);
   startdate.day     = (int)(atof(argv[6])/10000) - startdate.month*100;
   startdate.year    = (int)(atof(argv[6])) - startdate.month*1000000 - startdate.day*10000;
   startdate.hour    = 0;
   startdate.juldate = calc_juldate(startdate.year,startdate.month,startdate.day,0.);
   startdate         = get_season(startdate);
-
+  /// get end date
   enddate.month     = (int)(atof(argv[7])/1000000);
   enddate.day       = (int)(atof(argv[7])/10000) - enddate.month*100;
   enddate.year      = (int)(atof(argv[7])) - enddate.month*1000000 - enddate.day*10000;
@@ -477,7 +514,9 @@ int main(int argc, char *argv[]) {
   // Correct PrtAllGrids for situation where statistics are being calculated on less than a full year of data
   if ( SumSets == 0 ) PrtAllGrids = TRUE;
 
-  // Initialize Data Array
+  /**********************************
+    Initialize Data Array
+  ***********************************/
   gridval = (double **)calloc(StatInfo.Ncols,sizeof(double *));  
   for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
     gridval[cidx] = (double *)calloc(366,sizeof(double));  
@@ -490,39 +529,30 @@ int main(int argc, char *argv[]) {
   }
 
   /***************************************************
-    If not overwriting file validate previous files
+    Define variables required for processing
   ***************************************************/
-  if ( !OVERWRITE ) 
-    for( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-      if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
-	if ( ArcGrid )
-	  OVERWRITE = CheckExistingArcInfoGridFiles ( StatType, GridName, 
-						      StatInfo, GridFileName, 
-						      startdate, 0, 0, &nrow, 
-						      &ncol, &minlat, &minlng, 
-						      &cellsize, &NODATA );
-	else
-	  // make sure that row equals number of files, while col is always 1
-	  OVERWRITE = CheckExistingXyzFiles ( StatType, GridName, StatInfo, 
-					      GridFileName, startdate, 0,
-					      0, &nrow, &ncol, &minlat,
-					      &minlng, &cellsize, &NODATA );
-      }
-    }
-
-  GridLat = (double *)calloc(nrow, sizeof(double));
-  GridLng = (double *)calloc(ncol, sizeof(double));
+  if ( !ArcGrid ) {
+    // define latitude and longitude arrays for storing positions.
+    //  This is only needed for XYZ files, in which case nrows is set 
+    //  to the number of files, while ncols is set to 1.
+    GridLat = (double *)calloc(nrows, sizeof(double));
+    GridLng = (double *)calloc(nrows, sizeof(double));
+    for ( row = 0; row < nrows; row++ ) 
+      fscanf(flist,"%*s %lf %lf",&GridLat[row],&GridLng[row]);
+    rewind(flist);
+  }
  
+  // define grid value array for storing all data
   GridValues = (double ****)calloc(NumSets,sizeof(double ***)); 
   for( sidx =0; sidx<NumSets; sidx++) {
     GridValues[sidx] = (double ***)calloc(StatInfo.Ncols,sizeof(double **));
     for( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
-      GridValues[sidx][cidx] = (double **)calloc(nrow,sizeof(double *));
-      OutGrid = (double **)calloc(nrow,sizeof(double *));
-      for ( row = 0; row < nrow; row++ ) {
-	GridValues[sidx][cidx][row] = (double *)calloc(ncol,sizeof(double));
-	OutGrid[row] = (double *)calloc(ncol,sizeof(double));
-	for ( col = 0; col < ncol; col++ )
+      GridValues[sidx][cidx] = (double **)calloc(nrows,sizeof(double *));
+      OutGrid = (double **)calloc(nrows,sizeof(double *));
+      for ( row = 0; row < nrows; row++ ) {
+	GridValues[sidx][cidx][row] = (double *)calloc(ncols,sizeof(double));
+	OutGrid[row] = (double *)calloc(ncols,sizeof(double));
+	for ( col = 0; col < ncols; col++ )
 	  GridValues[sidx][cidx][row][col] = NODATA;
       }
     }
@@ -536,27 +566,19 @@ int main(int argc, char *argv[]) {
   nextdate.juldate = startdate.juldate;
   nextdate         = get_season(nextdate);
 
-  // Build blank files for overall statistics
+  /******************************************
+    Build blank files for overall statistics
+  ******************************************/
   for ( sidx = 0; sidx < SumSets; sidx++ ) {
     for( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
       if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
-	if ( ArcGrid )
-	  // Going to output statistics as an ArcInfo grid
-	  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-						  StatInfo, GridFileName,
-						  nextdate, NumSets+sidx, cidx, 
-						  NumSets, nrow, ncol, 
-						  minlat, minlng,
-						  cellsize, NODATA, 
-						  OVERWRITE);
-	else
-	  // Output to an ASCII XYZ file
-	  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+  	// Going to output statistics as an ArcInfo grid
+  	ErrNum = CheckExistingOutputFiles(ArcGrid, StatType, GridName,
 					  StatInfo, GridFileName,
-					  nextdate, NumSets+sidx, cidx, 
-					  NumSets, nrow, ncol, 
+					  nextdate, NumSets+sidx, cidx,
+					  NumSets, nrows, ncols,
 					  minlat, minlng,
-					  cellsize, NODATA, 
+					  cellsize, NODATA, Ncells, 
 					  OVERWRITE);
       }
     }
@@ -595,31 +617,18 @@ int main(int argc, char *argv[]) {
 			     &ColAggTypes, &TimeStep, &NumLayers, &NumNodes, 
 			     &NumBands, &NumFrostFronts, &NumLakeNodes, 
 			     &NumCols, &NumBytes );
-    
+    DONE = FALSE;
+      
     /**** Need to determine row and column of current file in grid file ****/
     if ( ArcGrid ) {
-      DONE = 0;
-      row = 0;
-      col = 0;
-      findlat = minlat + (row + 0.5) * cellsize;
-      findlng = minlng + (col + 0.5) * cellsize;
-      
-      // Determine the row position of the current cell
-      while(findlat + cellsize*0.25 < tmplat) {
-	row++;
-	findlat = minlat + (row + 0.5) * cellsize;
-      }
-      
-      // Determine column position of current cell
-      while ( findlng + cellsize*0.25 < tmplng ) {
-	col++;
-	findlng = minlng + (col + 0.5) * cellsize;
-      }
+      // identify row and column of current input file
+      row = nrows - (int)( ( tmplat - minlat ) / cellsize ) - 1;
+      col = (int)( ( tmplng - minlng ) / cellsize );
 
       // Check that current row and column are in the Arc/Info file boundaries
-      if ( row >= nrow || col >= ncol ) {
+      if ( row >= nrows || col >= ncols ) {
 	fprintf(stderr,"WARNING: %s located at (%i,%i) is outside the range of the grid file (%i,%i). Will not be processed.\n",
-		filename,row,col,nrow,ncol);
+		filename,row,col,nrows,ncols);
 	ProcessFile = FALSE;
       }
       fprintf(stdout,"\trow = %i,\tcol = %i\n",row,col);
@@ -749,22 +758,12 @@ int main(int argc, char *argv[]) {
 	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
 	    if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
 	      if ( filenum == 0 && PrtAllGrids ) {
-		if ( ArcGrid )
-		  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-							  StatInfo, GridFileName,
-							  startdate, sidx, cidx, 
-							  NumSets, nrow, ncol, 
-							  minlat, minlng,
-							  cellsize, NODATA, 
-							  OVERWRITE);
-		else
-		  // Output to an ASCII XYZ file
-		  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+	  	ErrNum = CheckExistingOutputFiles(ArcGrid, StatType, GridName,
 						  StatInfo, GridFileName,
-						  startdate, sidx, cidx, 
-						  NumSets, nrow, ncol, 
+						  startdate, sidx, cidx,
+						  NumSets, nrows, ncols,
 						  minlat, minlng,
-						  cellsize, NODATA, 
+						  cellsize, NODATA, Ncells,
 						  OVERWRITE);
 	      }
 	    }
@@ -774,7 +773,7 @@ int main(int argc, char *argv[]) {
 	    }
 	  }
 	  Nrec = 0;
-	}
+      }
 	else if ( tmpdate.juldate >= nextdate.juldate && sidx >= 0 ) {
 	  // process next set (annual, seasonal, monthly, etc) of data
 	  Nvals = (int)(nextdate.juldate+0.5)-(int)(lastdate.juldate+0.5);
@@ -823,63 +822,63 @@ int main(int argc, char *argv[]) {
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "othres", 6 ) == 0 ) {
 	      // Count all days a value is under the given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_count_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_count_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "uthres", 6 ) == 0 ) {
 	      // Count all days a value is under the given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_count_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_count_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgdaysothres", 13 ) == 0 ) {
 	      // Count all days a value is under the given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_average_days_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_average_days_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgdaysuthres", 13 ) == 0 ) {
 	      // Count all days a value is under the given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_average_days_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_average_days_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "daysothres", 10 ) == 0 ) {
 	      // Count all days a value is under the given threshold between first and last occurance centerd on the middle of the record
-	      GridValues[sidx][cidx][row][col] = (double)get_consecutive_days_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_consecutive_days_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "daysuthres", 10 ) == 0 ) {
 	      // Count consecutive days a value is under the given threshold between first and last occurance centerd on the middle of the record
-	      GridValues[sidx][cidx][row][col] = (double)get_consecutive_days_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_consecutive_days_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldayo", 5 ) == 0 ) {
 	      // find the last day a value is over a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldayu", 5 ) == 0 ) {
 	      // find the last day a value is under a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdayo", 5 ) == 0 ) {
 	      // find the first day a value is over a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdayu", 5 ) == 0 ) {
 	      // find the first day a value is under a given threshold
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldaymido", 8 ) == 0 ) {
 	      // find the last day a value is over a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "ldaymidu", 8 ) == 0 ) {
 	      // find the last day a value is under a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_last_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdaymido", 8 ) == 0 ) {
 	      // find the first day a value is over a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_over_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "fdaymidu", 8 ) == 0 ) {
 	      // find the first day a value is under a given threshold from middle record
-	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA, lastdate);
+	      GridValues[sidx][cidx][row][col] = (double)get_first_day_under_thres_from_middle(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA, lastdate);
 	    }
 	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "crossthres", 10 ) == 0 ) {
 	      // count the number of times a threshold is crossed
-	      GridValues[sidx][cidx][row][col] = (double)get_count_times_thres_crossed(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA);
+	      GridValues[sidx][cidx][row][col] = (double)get_count_times_thres_crossed(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
 	    else if ( strcasecmp(StatInfo.ColStatList[cidx], "stdev") == 0 ) {
 	      // Find the standard deviation
@@ -911,7 +910,7 @@ int main(int argc, char *argv[]) {
 	    }
 	    else if ( strncasecmp(StatInfo.ColStatList[cidx], "quan", 4) == 0 ) {
 	      // Find the cumulative sum
-	      GridValues[sidx][cidx][row][col] = get_quantile(gridval[cidx], StatInfo.Thres[cidx], Nvals, (double)NODATA );
+	      GridValues[sidx][cidx][row][col] = get_quantile(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA );
 	    }
 	    else
 	    // Find the mean
@@ -919,21 +918,12 @@ int main(int argc, char *argv[]) {
 	    // Create and initialize output file name for next increment
 	    if ( filenum == 0 && tmpdate.juldate < enddate.juldate && PrtAllGrids ) {
 	      if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
-		if ( ArcGrid )
-		  ErrNum = CreateNewBlankArcInfoGridFiles(StatType, GridName,
-							  StatInfo, GridFileName,
-							  nextdate, sidx+1, cidx, 
-							  NumSets, nrow, ncol, minlat, minlng,
-							  cellsize, NODATA, 
-							  OVERWRITE);
-		else
-		  // Output to an ASCII XYZ file
-		  ErrNum = CreateNewBlankXyzFiles(StatType, GridName,
+	    	ErrNum = CheckExistingOutputFiles(ArcGrid, StatType, GridName,
 						  StatInfo, GridFileName,
-						  nextdate, sidx+1, cidx, 
-						  NumSets, nrow, ncol, 
+						  nextdate, sidx+1, cidx,
+						  NumSets, nrows, ncols,
 						  minlat, minlng,
-						  cellsize, NODATA, 
+						  cellsize, NODATA, Ncells, 
 						  OVERWRITE);
 	      }
 	    }
@@ -1032,18 +1022,18 @@ int main(int argc, char *argv[]) {
     if ( strcasecmp( StatInfo.ColStatList[cidx], "none" ) != 0 ) {
 
       // Plot individual time period grids
-      if ( PrtAllGrids ) {
-	for ( sidx = 0; sidx < NumSets; sidx++ )
-	  ErrNum = write_arcinfo_grid(GridFileName[sidx][cidx], 
-				      GridValues[sidx][cidx], GridLat, GridLng, 
-				      ncol, nrow, minlat, minlng, cellsize, 
-				      NODATA, Ncells);
-      }
+      if ( PrtAllGrids ) 
+	for ( sidx = 0; sidx < NumSets; sidx++ ) // GRIDFILENAME should be formatted for the next date, so that that is not required here.
+	  ErrNum = WriteOutputFiles( ArcGrid, GridFileName[sidx][cidx], 
+				     GridValues[sidx][cidx], GridLat,
+				     GridLng, nrows, ncols, minlat, 
+				     minlng, cellsize, NODATA, Ncells,
+				     OVERWRITE);
 
       // Compute average for all time periods
       for ( sumidx = 0; sumidx < SumSets; sumidx++ ) {
-	for ( row = 0; row < nrow; row++ ) {
-	  for ( col = 0; col < ncol; col++ ) {
+	for ( row = 0; row < nrows; row++ ) {
+	  for ( col = 0; col < ncols; col++ ) {
 	    // compute average value
 	    OutGrid[row][col] = ValCnt = 0;
 	    for ( sidx = sumidx; sidx < NumSets; sidx+=SumSets ) {
@@ -1062,9 +1052,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Update Grid file for current value
-	ErrNum = write_arcinfo_grid(GridFileName[NumSets+sumidx][cidx], 
-				    OutGrid, GridLat, GridLng, ncol, nrow, 
-				    minlat, minlng, cellsize, NODATA, Ncells);
+	ErrNum = WriteOutputFiles( ArcGrid, GridFileName[NumSets+sumidx][cidx], 
+				   OutGrid, GridLat, GridLng, nrows, ncols, 
+				   minlat, minlng, cellsize, NODATA, Ncells,
+				   OVERWRITE);
       }
     }
   }
@@ -1073,16 +1064,53 @@ int main(int argc, char *argv[]) {
 
 }
 
-int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo, 
-		 char **ColNames, int NumCols, int *CalcPE, 
-		 int *CalcTR, int *CalcMGDD, int *CalcCH ) {
+/**********************************************************************
+**********************************************************************
+**********************************************************************
 
-  // Modified 2008-May-13 to remove column number from input file.
-  // modifeid 2017-May-31 to add flags for additional calculations.
+  Subroutines and Functions Defined Below
+
+**********************************************************************
+**********************************************************************
+**********************************************************************/
+
+int GetStatInfo( char            *StatInfoParam, 
+		 StatInfoStruct  *StatInfo, 
+		 char           **ColNames, 
+		 int              NumCols, 
+		 int             *CalcPE, 
+		 int             *CalcTR, 
+		 int             *CalcMGDD, 
+		 int             *CalcCH,
+		 char             ArcGrid, 
+		 double          *GridLat,
+		 double          *GridLng,
+		 int              nrows, 
+		 int              ncols,
+		 double           minlat,
+		 double           minlng,
+		 double           cellsize,
+		 int              NODATA) {
+/**********************************************************************
+  GetStatInfo                Keith Cherkauer           
+
+  Read statistics definition file, and populated the StatInfoStruct
+  with all required information.
+
+  Modifications
+  2008-May-13 to remove column number from input file.
+  2017-May-31 to add flags for additional calculations.
+  2017-Jun-12 to add two dimensional storage array for 
+       threshold values, so files can be read in to set thresholds
+       specific to each VIC model output cell. KAC
+
+**********************************************************************/
 
   FILE *fin;
-  int cidx, idx, tidx, Ncols;
-  char tmpstr[1024];
+  int cidx, idx, tidx, Ncols, row, col, tmpCells;
+  char tmpstr[MaxCharData], chkFile[MaxCharData];
+  char shortName[MaxCharData], thresName[MaxCharData];
+  double tmpThres;
 
   // Open column statistics definition file
   if((fin=fopen(StatInfoParam,"r"))==NULL) {
@@ -1092,22 +1120,28 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo,
 
   // Determine columns to be processed
   StatInfo->Ncols = 0;
-  fgets(tmpstr, 1024, fin);
+  fgets(tmpstr, MaxCharData, fin);
   while ( !feof(fin) ) {
     StatInfo->Ncols++;
-    fgets(tmpstr, 1024, fin);
+    fgets(tmpstr, MaxCharData, fin);
   }
   rewind(fin);
   StatInfo->ColNumList  = (int *)calloc(StatInfo->Ncols,sizeof(int));
   StatInfo->ColNameList = (char **)calloc(StatInfo->Ncols,sizeof(char *));
   StatInfo->ColStatList = (char **)calloc(StatInfo->Ncols,sizeof(char *));
-  StatInfo->Thres       = (float *)calloc(StatInfo->Ncols,sizeof(float));
+  StatInfo->Thres       = (double ***)calloc(StatInfo->Ncols,sizeof(double**));
+  for ( cidx=0; cidx < StatInfo->Ncols; cidx++ ) {
+    // allocate space for gridded threshold values
+    StatInfo->Thres[cidx] = (double **)calloc(nrows,sizeof(double*));
+    for ( row = 0; row < nrows; row++ )
+      StatInfo->Thres[cidx][row] = (double *)calloc(ncols,sizeof(double));
+  }
   StatInfo->MaxColNum   = -9;
   Ncols = 0;
   for ( cidx = StatInfo->Ncols-1; cidx >= 0; cidx-- ) {
     StatInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
     StatInfo->ColStatList[cidx] = (char *)calloc(25,sizeof(char));
-    fgets(tmpstr, 1024, fin);
+    fgets(tmpstr, MaxCharData, fin);
     sscanf( tmpstr, "%s %s", StatInfo->ColNameList[cidx], 
 	    StatInfo->ColStatList[cidx] );
     if ( strncasecmp( StatInfo->ColStatList[cidx], "othres", 6 ) == 0 
@@ -1118,10 +1152,32 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo,
 	 || strncasecmp( StatInfo->ColStatList[cidx], "crossthres", 10 ) == 0
 	 || strncasecmp( StatInfo->ColStatList[cidx], "avgdays", 7 ) == 0
 	 || strncasecmp( StatInfo->ColStatList[cidx], "quan", 4 ) == 0 ) {
-      // need to get the threshold value
-      sscanf( tmpstr, "%*s %*s %f", &StatInfo->Thres[cidx] ); 
-      // add it to the statistic name so that output files can be differentiated
-      sprintf( StatInfo->ColStatList[cidx], "%s_%g", StatInfo->ColStatList[cidx], StatInfo->Thres[cidx] );
+      // check if threshold is a file
+      sscanf( tmpstr, "%*s %*s %s", chkFile );
+      if ( strcasecmp( chkFile, "FILE" ) == 0 ) {
+	// threshold is a valid file name, so read contents into threshold array
+	sscanf( tmpstr, "%*s %*s %*s %s %s", shortName, thresName );
+	// read spatially distributed thresholds from existing file
+	tmpCells = ReadOutputFiles( ArcGrid, thresName, StatInfo->Thres[cidx],
+				    GridLat, GridLng, nrows, ncols, minlat,
+				    minlng, cellsize, NODATA);
+	if ( tmpCells != nrows*ncols ) {
+	  fprintf( stderr, "ERROR: Number of cells from threshold file does not match the number defined for the current domain.\n" );
+	  exit (FAIL);
+	}
+	// build metric name with shortened name from stats control file
+	sprintf( StatInfo->ColStatList[cidx], "%s_%s", StatInfo->ColStatList[cidx], shortName );
+      }
+      else {
+	// threshold is not a valid filename, check for a constant value
+	tmpThres = atof( chkFile );
+	for ( row = 0; row < nrows; row ++ )
+	  for ( col = 0; col < ncols; col++ )
+	    StatInfo->Thres[cidx][row][col] = tmpThres;
+	// add thres value to the statistic name so that output files can be differentiated
+	sprintf( StatInfo->ColStatList[cidx], "%s_%g", StatInfo->ColStatList[cidx], tmpThres );
+
+      }
     }
     for ( idx = 0; idx < NumCols; idx++ ) {
       if ( strcasecmp( ColNames[idx], StatInfo->ColNameList[cidx] ) == 0 ) {
@@ -1137,7 +1193,7 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo,
 	strcpy( StatInfo->ColNameList[tidx], StatInfo->ColNameList[tidx+1] );
 	strcpy( StatInfo->ColStatList[tidx], StatInfo->ColStatList[tidx+1] );
 	StatInfo->ColNumList[tidx] = StatInfo->ColNumList[tidx+1];
-	StatInfo->Thres[tidx] = StatInfo->Thres[tidx+1];
+	StatInfo->Thres[tidx][row][col] = StatInfo->Thres[tidx+1][row][col];
       }
       StatInfo->Ncols--;
     }
@@ -1164,11 +1220,23 @@ int GetStatInfo( char *StatInfoParam, StatInfoStruct *StatInfo,
   return(0);
 }
 
-int GetPenmanInfo( PenInfoStruct *PenInfo, char **ColNames, int NumCols ) {
+int GetPenmanInfo( PenInfoStruct  *PenInfo, 
+		   char          **ColNames, 
+		   int             NumCols ) {
+/**********************************************************************
+  GetPenmanInfo     Keith Cherkauer           May 14, 2008
 
-  // Modified 2008-May-14 copied from GetStatInfo.
-  // Modified 2008-May-28 to remove need for separate file to define penman variables.
-  // Modified 2016-Jan-12 to add OUT_PE as a variable column name
+  Determine if the required columns are in the set of model output
+  files to complete an off-line calculation of Potential Evaporation 
+  using the Penman method.  If so, then store the required information
+  for use later in the processing script.
+
+  Modifications
+  2008-May-14 copied from GetStatInfo.
+  2008-May-28 to remove need for separate file to define penman variables.
+  2016-Jan-12 to add OUT_PE as a variable column name
+
+**********************************************************************/
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for PE!
   static char *PenmanList[] = { "OUT_R_NET", "OUT_GRND_FLUX", "OUT_WIND", "OUT_SURF_TEMP", "OUT_REL_HUMID", "OUT_AIR_TEMP", "OUT_PE" };
@@ -1204,9 +1272,21 @@ int GetPenmanInfo( PenInfoStruct *PenInfo, char **ColNames, int NumCols ) {
 
 }
 
-int GetTotalRunoffInfo( PenInfoStruct *TRoffInfo, char **ColNames, int NumCols ) {
+int GetTotalRunoffInfo( PenInfoStruct  *TRoffInfo, 
+			char          **ColNames, 
+			int             NumCols ) {
+/**********************************************************************
+  GetTotalRunoffInfo     Keith Cherkauer           November 12, 2008
 
-  // Modified 2008-Nov-12 copied from GetPenInfo.
+  Determine if the required columns are in the set of model output
+  files to complete an off-line calculation of Total Runoff (surface
+  runoff + baseflow).  If so, then store the required information
+  for use later in the processing script.
+
+  Modifications
+  2008-Nov-12 copied from GetPenInfo.
+
+**********************************************************************/
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
   static char *TotalRunoffList[] = { "OUT_RUNOFF", "OUT_BASEFLOW", "OUT_TOTAL_RUNOFF" };
@@ -1241,11 +1321,23 @@ int GetTotalRunoffInfo( PenInfoStruct *TRoffInfo, char **ColNames, int NumCols )
   return (TRUE);
 }
 
-int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *MGDDInfo, StatInfoStruct *StatInfo, char **ColNames, int NumCols ) {
-  /* Modified 2017-May-30 copied from GetTotalRunoffInfo, then modified to 
-     search through StatInfo table first to determine is the required
-     variable is already being stored for other statistics.  If not, then 
-     it is added to StatInfoStruct so that it is available for later use. */
+int GetModifiedGrowingDegreeDayInfo( PenInfoStruct   *MGDDInfo, 
+				     StatInfoStruct  *StatInfo, 
+				     char           **ColNames, 
+				     int              NumCols ) {
+/**********************************************************************
+  GetModifiedGrowingDegreeDayInfo     Keith Cherkauer           May 30, 2017
+
+  Determine if the required columns are in the set of model output
+  files to complete an off-line calculation of modified Growing Degree 
+  Days using the method defined by the Midwestern Regional Climate Center 
+  (MRCC).  If so, then store the required information for use later in 
+  the processing script.
+
+  Modifications
+  2017-May-30 Copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
   static char *MGDDList[] = { "IN_TMIN", "IN_TMAX", "OUT_MGDD" };
@@ -1313,11 +1405,25 @@ int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *MGDDInfo, StatInfoStruct *St
 
 }
 
-int CalcModifiedGrowingDegreeDays( double *MGDD, double *TMIN, double *TMAX, DATE_STRUCT startdate, int Nvals ) {
-  // Modified Growing Degree Day based on the default method calculated
-  // by the Midwest Regional Climate Center (MRCC) as of May 2017
-  // Source: mrcc.isws.illinois.edu/cliwatch/mgdd/
-  // Based on critical temperature of 50F for corn and soybean
+int CalcModifiedGrowingDegreeDays( double      *MGDD, 
+				   double      *TMIN, 
+				   double      *TMAX, 
+				   DATE_STRUCT  startdate, 
+				   int          Nvals ) {
+/**********************************************************************
+  CalcModifiedGrowingDegreeDays     Keith Cherkauer           May 30, 2017
+
+  This subroutine calculates Modified Growing Degree Days using the 
+  method defined by the Midwestern Regional Climate Center (MRCC) as 
+  of May 2017
+  Source: mrcc.isws.illinois.edu/cliwatch/mgdd/
+  Based on critical temperature of 50F for corn and soybean
+
+  Modifications
+
+**********************************************************************/
+
+  int ErrNum=0;
   int didx;
   double tmpTMIN, tmpTMAX;
   double tmpStartJulDate, tmpEndJulDate;
@@ -1345,15 +1451,27 @@ int CalcModifiedGrowingDegreeDays( double *MGDD, double *TMIN, double *TMAX, DAT
     }
   }
 
-  return 1;
+  return 0;
 
 }
 
-int GetChillingHoursInfo( PenInfoStruct *ChillHrInfo, StatInfoStruct *StatInfo, char **ColNames, int NumCols ) {
-  /* Modified 2017-May-30 copied from GetTotalRunoffInfo, then modified to 
-     search through StatInfo table first to determine is the required
-     variable is already being stored for other statistics.  If not, then 
-     it is added to StatInfoStruct so that it is available for later use. */
+int GetChillingHoursInfo( PenInfoStruct   *ChillHrInfo, 
+			  StatInfoStruct  *StatInfo, 
+			  char           **ColNames, 
+			  int              NumCols ) {
+/**********************************************************************
+  GetChillingHoursInfo     Keith Cherkauer           May 30, 2017
+
+  Determine if the required columns are in the set of model output
+  files to complete an off-line calculation of Chilling Hours as defined
+  by Janna Beckerman (Purdeu, HORT) for the INCCIA 2017.   Chilling hours
+  refer to required low temperatures to set fruit tree buds.  If so, then 
+  store the required information for use later in the processing script.
+
+  Modifications
+  2017-May-30 copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
   static char *ChillHrList[] = { "IN_TMIN", "IN_TMAX", "OUT_CHILL_HR" };
@@ -1422,8 +1540,24 @@ int GetChillingHoursInfo( PenInfoStruct *ChillHrInfo, StatInfoStruct *StatInfo, 
 }
 
 int CalcChillingHours( double *ChillHr, double *TMIN, double *TMAX, DATE_STRUCT startdate, int Nvals ) {
-  // Calculate chilling hours based on equation provided by 
-  // Janna Beckerman for the INCCIA 2017 report.
+/**********************************************************************
+  CalcChillingHours     Keith Cherkauer           May 30, 2017
+
+  This subroutine calculates Chilling Hours using the definition 
+  developed as part of the Agriculture Working Group of the 2017 INCCIA.
+  Relies on a simple triangular (Sanders, 1975) approximation to get 
+  hourly temperatures from daily maximum and minimum values.  
+
+  Chilling hours evalaute the accumulation of cold required to set the 
+  buds of fruit trees and bushes.
+
+  Source: Janna Beckerman, Purdue
+
+  Modifications
+
+**********************************************************************/
+
+  int ErrNum=0;
   int didx, hidx;
   double tmpTMIN, tmpTMAX;
   double tmpStartJulDate, tmpEndJulDate;
@@ -1467,157 +1601,107 @@ int CalcChillingHours( double *ChillHr, double *TMIN, double *TMAX, DATE_STRUCT 
 
   free(tmpTair);
 
-  return 1;
+  return ErrNum;
 
 }
 
-int CreateNewBlankArcInfoGridFiles ( char StatType,
-				     char *GridName,
-				     StatInfoStruct StatInfo, 
-				     char ***GridFileName,
-				     DATE_STRUCT date,
-				     int sidx,
-				     int cidx,
-				     int NumSets,
-				     int nrow,
-				     int ncol,
-				     double minlat,
-				     double minlng,
-				     double cellsize,
-				     int NODATA,
-				     char OVERWRITE ) {
+char CheckExistingOutputFiles ( char              ArcGrid,
+				char              StatType,
+				char             *GridName,
+				StatInfoStruct    StatInfo, 
+				char           ***GridFileName,
+				DATE_STRUCT       date,
+				int               sidx,
+				int               cidx,
+				int               NumSets,
+				int               nrows,
+				int               ncols,
+				double            ll_lat,
+				double            ll_lng,
+				double            cellsize,
+				int               NODATA,
+				int               Ncells, // same as Nfiles for XYZ case
+				char              OVERWRITE) {
+/**********************************************************************
+  CheckExistingOutputFiles     Keith Cherkauer           June 14, 2017
 
-  FILE *fin;
-  char idstr[250];
+  This subroutine opens an existing data file in ArcInfo Grid or XYZ
+  format, extracts it contents, and then checks that the data in the
+  file corresponds to that in the previously defined analysis domain.
+
+  Modifications
+
+**********************************************************************/
   int ErrNum;
+  char idstr[MaxCharData];
 
+  // build output file name
   if ( sidx < NumSets ) {
+    // this is an annual output file
     if ( StatInfo.UseColFile )
       sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
 	      StatInfo.ColStatList[cidx]);
     else 
       sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
     if ( StatType == 'A' || StatType == 'P' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, date.year, idstr);
     else if ( StatType == 'S' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      SeasonNames[date.season], idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, date.year, SeasonNames[date.season], idstr);
     else if ( StatType == 'M' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      MonthNames[date.month-1], idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, date.year, MonthNames[date.month-1], idstr);
     else if ( StatType == 'W' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      date.doy, date.doy+6, idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, date.year, date.doy, date.doy+6, idstr);
     else 
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      date.doy, idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, date.year, date.doy, idstr);
   }
   else {
+    // this is an overall annual average statistic file
     if ( StatInfo.UseColFile )
       sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
 	      StatInfo.ColStatList[cidx]);
     else 
       sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
     if ( StatType == 'A' || StatType == 'P' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, 9999, idstr);
     else if ( StatType == 'S' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      SeasonNames[date.season], idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, 9999, SeasonNames[date.season], idstr);
     else if ( StatType == 'M' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      MonthNames[date.month-1], idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, 9999, MonthNames[date.month-1], idstr);
     else if ( StatType == 'W' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      date.doy, date.doy+6, idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, 9999, date.doy, date.doy+6, idstr);
     else 
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      date.doy, idstr);
+      sprintf(GridFileName[sidx][cidx], GridName, 9999, date.doy, idstr);
   }
 
-  // Create blank file
-  if ( OVERWRITE ) 
-    ErrNum = write_blank_arcinfo_grid(GridFileName[sidx][cidx], ncol, nrow, 
-				      minlat, minlng, cellsize, NODATA);
-  else if ( ( fin = fopen(GridFileName[sidx][cidx], "r") ) == NULL )
-    ErrNum = write_blank_arcinfo_grid(GridFileName[sidx][cidx], ncol, nrow, 
-				      minlat, minlng, cellsize, NODATA);
-  else {
-    fclose ( fin ); 
-    ErrNum = 0;
-  }
+  /* ErrNum = OVERWRITE; */
+  /* if ( OVERWRITE ) */
+  /*   ErrNum = CheckExistingArcInfoGridFiles ( StatType, GridName,  */
+  /* 					     StatInfo, GridFileName,  */
+  /* 					     startdate, 0, 0, &nrows,  */
+  /* 					     &ncols, &minlat, &minlng,  */
+  /* 					     &cellsize, &NODATA, OVERWRITE ); */
+  /* else */
+  /*   // make sure that row equals number of files, while col is always 1 */
+  /*   ErrorNum = CheckExistingXyzFiles ( StatType, GridName, StatInfo,  */
+  /* 				       GridFileName, startdate, 0, */
+  /* 				       0, &nrows, &ncols, &minlat, */
+  /* 				       &minlng, &cellsize, &NODATA,  */
+  /* 				       OVERWRITE ); */
 
-  return(ErrNum);
+  return (OVERWRITE);
 
 }
 
-char CheckExistingArcInfoGridFiles ( char              StatType,
-				     char             *GridName,
-				     StatInfoStruct    StatInfo, 
-				     char           ***GridFileName,
-				     DATE_STRUCT        date,
-				     int               sidx,
-				     int               cidx,
-				     int              *nrows,
-				     int              *ncols,
-				     double            *ll_lat,
-				     double            *ll_lng,
-				     double            *cellsize,
-				     int              *NODATA ) {
-
-  FILE *fin;
-  char idstr[250];
-
-  if ( StatInfo.UseColFile )
-    sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
-	    StatInfo.ColStatList[cidx]);
-  else 
-    sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
-  if ( StatType == 'A' || StatType == 'P' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    idstr);
-  else if ( StatType == 'S' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    SeasonNames[date.season], idstr);
-  else if ( StatType == 'M' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    MonthNames[date.month-1], idstr);
-  else if ( StatType == 'W' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    date.doy, date.doy+6, idstr);
-  else 
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    date.doy, idstr);
-
-  // Create blank file
-  if ( ( fin = fopen(GridFileName[sidx][cidx], "r") ) == NULL )
-    return (TRUE);
-  else {
-    fscanf(fin,"%*s %i",&ncols[0]);
-    fscanf(fin,"%*s %i",&nrows[0]);
-    fscanf(fin,"%*s %lf",&ll_lng[0]);
-    fscanf(fin,"%*s %lf",&ll_lat[0]);
-    fscanf(fin,"%*s %lf",&cellsize[0]);
-    fscanf(fin,"%*s %i",&NODATA[0]);
-    fclose ( fin ); 
-    return (FALSE);
-  }
-
-  return(-1);
-
-}
-
-int read_arcinfo_grid(char    *filename,
-		      double  *lat,
-		      double  *lng,
-		      int     *ncols,
-		      int     *nrows,
-		      double  *ll_lat,
-		      double  *ll_lng,
-		      double  *cellsize,
-		      int    *NODATA,
-		      double **values) {
+int read_arcinfo_grid(char     *filename,
+		      double  **lat,
+		      double  **lng,
+		      int      *ncols,
+		      int      *nrows,
+		      double   *ll_lat,
+		      double   *ll_lng,
+		      double   *cellsize,
+		      int      *NODATA,
+		      double ***values) {
 /**********************************************************************
   read_arcinfo_info           Keith Cherkauer           May 5, 1998
 
@@ -1626,14 +1710,18 @@ int read_arcinfo_grid(char    *filename,
   assigned the value of NODATA.  Routine returns the number of defined 
   grid cell.
 
+  Modifications
+  14-Jun-2017 Reversed sense of latitude storage so that north it up
+    (first row) rather than down as previously stored.        KAC
+
 **********************************************************************/
 
   FILE   *farc;
-  int    i, j;
+  int     i, j;
   double  tmp_lat;
   double  tmp_lng;
-  int    cell;
-  int    Ncells;
+  int     cell;
+  int     Ncells;
   double  tmpvalue;
 
   if((farc=fopen(filename,"r"))==NULL) {
@@ -1642,15 +1730,20 @@ int read_arcinfo_grid(char    *filename,
   }
 
   /***** Read ARC/INFO Header *****/
-  fscanf(farc,"%*s %i",&ncols[0]);
-  fscanf(farc,"%*s %i",&nrows[0]);
-  fscanf(farc,"%*s %lf",&ll_lng[0]);
-  fscanf(farc,"%*s %lf",&ll_lat[0]);
-  fscanf(farc,"%*s %lf",&cellsize[0]);
-  fscanf(farc,"%*s %i",&NODATA[0]);
+  fscanf(farc,"%*s %i",  ncols );
+  fscanf(farc,"%*s %i",  nrows);
+  fscanf(farc,"%*s %lf", ll_lng );
+  fscanf(farc,"%*s %lf", ll_lat);
+  fscanf(farc,"%*s %lf", cellsize );
+  fscanf(farc,"%*s %i",  NODATA );
+  Ncells = ncols[0]*nrows[0];
 
-  /***** Allocate Latitude and Longitude Arrays for maximum size *****/
-  Ncells    = ncols[0]*nrows[0];
+  /***** Allocate memory for data storage *****/
+  (*lat) = (double *)calloc((*nrows),sizeof(double));
+  (*lng) = (double *)calloc((*ncols),sizeof(double));
+  (*values) = (double **)calloc((*nrows),sizeof(double *));
+  for ( j = 0; j < (*nrows); j++ )
+    (*values)[j] = (double *)calloc((*ncols),sizeof(double));
 
   /***** Check for Valid Location *****/
   cell = 0;
@@ -1659,9 +1752,11 @@ int read_arcinfo_grid(char    *filename,
     for ( i = 0; i < (*ncols); i++ ) {
       tmp_lng = (*ll_lng) + (double)( i + 0.5 ) * (*cellsize);
       fscanf(farc,"%lf",&tmpvalue);
-      lat[(*nrows)-j-1]    = tmp_lat;
-      lng[i]    = tmp_lng;
-      values[(*nrows)-j-1][i] = tmpvalue;
+      //(*lat)[(*nrows)-j-1] = tmp_lat;
+      (*lat)[j] = tmp_lat;
+      (*lng)[i] = tmp_lng;
+      //(*values)[(*nrows)-j-1][i] = tmpvalue;
+      (*values)[j][i] = tmpvalue;
       cell++;
     }
   }
@@ -1686,23 +1781,28 @@ int write_arcinfo_grid(char   *filename,
 /**********************************************************************
   write_arcinfo_info       Keith Cherkauer           April 14, 1999
 
-  This subroutine reads data from an ARC/INFO ascii grid and returns 
+  This subroutine writes data to an ARC/INFO ascii grid and returns 
   the central latitude and longitude of all grid cells that are not 
   assigned the value of NODATA.  Routine returns the number of defined 
   grid cell.
 
+  Modifications:
   09-22-04 Modified to make write cell values even if they are not in
            the correct order.                                   KAC
+  14-Jun-2017 Reversed sense of latitude storage so that north it up
+    (first row) rather than down as previously stored.        KAC
 
 **********************************************************************/
 
   FILE   *farc;
   int    i, j;
   int    cell;
+  int    ErrNum;
 
   if((farc=fopen(filename,"w"))==NULL) {
     fprintf(stderr,"ERROR: Unable to open ARCINFO grid %s for writing.\n",filename);
-    exit(0);
+    ErrNum = -1;
+    return( ErrNum );
   }
 
   /***** Write ARC/INFO Header *****/
@@ -1717,8 +1817,10 @@ int write_arcinfo_grid(char   *filename,
   cell = 0;
   for ( j = 0; j < nrows; j++ ) {
     for ( i = 0; i < ncols; i++ ) {
-      if ( values[nrows-j-1][i] != NODATA )
-	fprintf(farc,"%lf",values[nrows-j-1][i]);
+      //if ( values[nrows-j-1][i] != NODATA )
+      //fprintf(farc,"%lf",values[nrows-j-1][i]);
+      if ( values[j][i] != NODATA )
+	fprintf(farc,"%lf",values[j][i]);
       else
 	fprintf(farc,"%i",(int)NODATA);
       cell++;
@@ -1743,9 +1845,13 @@ int write_blank_arcinfo_grid(char   *filename,
 			     double   cellsize,
 			     int     NODATA) {
 /**********************************************************************
-  write_arcinfo_info       Keith Cherkauer           September 21, 2004
+  write_blank_arcinfo_info       Keith Cherkauer           September 21, 2004
 
   This subroutine writes an ArcInfo grid filled with NODATA values.
+
+  Modifications:
+  14-Jun-2017 Reversed sense of latitude storage so that north it up
+    (first row) rather than down as previously stored.        KAC
 
 **********************************************************************/
 
@@ -1781,147 +1887,267 @@ int write_blank_arcinfo_grid(char   *filename,
 
 }
 
-int CreateNewBlankXyzFiles ( char StatType,
-			     char *GridName,
-			     StatInfoStruct StatInfo, 
-			     char ***GridFileName,
-			     DATE_STRUCT date,
-			     int sidx,
-			     int cidx,
-			     int NumSets,
-			     int nrow,
-			     int ncol,
-			     double minlat,
-			     double minlng,
-			     double cellsize,
-			     int NODATA,
-			     char OVERWRITE ) {
+int WriteOutputFiles ( char              ArcGrid,
+		       char             *GridFileName,
+		       double          **GridValues,
+		       double           *GridLat,
+		       double           *GridLng,
+		       int               nrows,
+		       int               ncols,
+		       double            minlat,
+		       double            minlng,
+		       double            cellsize,
+		       int               NODATA,
+		       int               Ncells,
+		       char              OVERWRITE ) {
+/**********************************************************************
+  WriteOutputFiles       Keith Cherkauer           June 13, 2017
 
-  FILE *fin;
-  char idstr[250];
+  This subroutine writes summary statistics to either ARC/INFO ascii 
+  grid files, or ASCII XYZ files.  When OVERWRITE flag is set, the 
+  program reads an existing file of he same format and uses values from 
+  the file read to fill missing values from the current job.
+
+**********************************************************************/
   int ErrNum;
 
-  if ( sidx < NumSets ) {
-    if ( StatInfo.UseColFile )
-      sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
-	      StatInfo.ColStatList[cidx]);
-    else 
-      sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
-    if ( StatType == 'A' || StatType == 'P' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      idstr);
-    else if ( StatType == 'S' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      SeasonNames[date.season], idstr);
-    else if ( StatType == 'M' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      MonthNames[date.month-1], idstr);
-    else if ( StatType == 'W' )
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      date.doy, date.doy+6, idstr);
-    else 
-      sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	      date.doy, idstr);
-  }
-  else {
-    if ( StatInfo.UseColFile )
-      sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
-	      StatInfo.ColStatList[cidx]);
-    else 
-      sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
-    if ( StatType == 'A' || StatType == 'P' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      idstr);
-    else if ( StatType == 'S' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      SeasonNames[date.season], idstr);
-    else if ( StatType == 'M' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      MonthNames[date.month-1], idstr);
-    else if ( StatType == 'W' )
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      date.doy, date.doy+6, idstr);
-    else 
-      sprintf(GridFileName[sidx][cidx], GridName, 9999, 
-	      date.doy, idstr);
+  // Read in existing data and use to complete current data array
+  if ( !OVERWRITE ) {
+    // here the original file should be read in, and any missing values
+    // in the new dataset shoudl be replaced using the values from 
+    // the existing file.  In that way, original values are preserved, if
+    // nothing new has been estimated.
   }
 
-  // set default no error
-  ErrNum = 0;
+  // Write existing data array to output file
+  if ( ArcGrid )
+    // Going to output statistics as an ArcInfo grid
+    ErrNum = write_arcinfo_grid(GridFileName, GridValues, 
+				GridLat, GridLng, ncols, nrows, 
+				minlat, minlng, cellsize, NODATA, Ncells);
+  else
+    // Output to an ASCII XYZ file
+    
+    ErrNum = WriteXyzFiles(GridFileName, GridValues, GridLat, GridLng, 
+			   nrows, ncols, minlat, minlng, 
+			   cellsize, NODATA, Ncells);
+  
+  return (ErrNum);
+}
 
-  // Create blank file
-  if ( OVERWRITE ) // obliterate any existing file
-    if ( ( fin = fopen( GridFileName[sidx][cidx], "w" ) ) == NULL )
-      ErrNum = -1; // cannot open file for some reason, report error
-  else if ( ( fin = fopen(GridFileName[sidx][cidx], "r") ) == NULL ) // no previous file
-    if ( ( fin = fopen( GridFileName[sidx][cidx], "w" ) ) == NULL ) // create new file
-      ErrNum = -1; // Failed to create new file, report error
-  fclose ( fin ); 
+int WriteXyzFiles ( char    *filename,
+		   double **values,
+		   double  *lat,
+		   double  *lng,
+		   int      ncols,
+		   int      nrows,
+		   double   ll_lat,
+		   double   ll_lng,
+		   double   cellsize,
+		   int      NODATA,
+		   int      Ncells ) {
+/**********************************************************************
+  WriteXyzFiles       Keith Cherkauer           June 13, 2017
+
+  This subroutine writes summary statistics to an ASCII XYZ file.  
+
+  NOTE: XYZ files are stored with nrows = number of XY pairs in the 
+    file, and ncols = 1.
+
+**********************************************************************/
+  FILE *fxyz;
+  int ErrNum=0;
+  int row;
+
+  // Open output file
+  if ( ( fxyz = fopen( filename, "w" ) ) == NULL ) {
+    fprintf(stderr,"ERROR: Unable to open XYZ file %s for writing.\n",filename);
+    ErrNum = -1; // cannot open file for some reason, report error
+    return(ErrNum);
+  }
+
+  // Write data to output file
+  for ( row = 0; row < nrows; row++ )
+    fprintf( fxyz, "%f %f %f\n", lng[row], lat[row], values[row][0] );
+
+  // close output file
+  ErrNum = fclose(fxyz);
 
   return(ErrNum);
 
 }
 
-char CheckExistingXyzFiles ( char              StatType,
-			     char             *GridName,
-			     StatInfoStruct    StatInfo, 
-			     char           ***GridFileName,
-			     DATE_STRUCT       date,
-			     int               sidx,
-			     int               cidx,
-			     int              *nrows,
-			     int              *ncols,
-			     double           *ll_lat,
-			     double           *ll_lng,
-			     double           *cellsize,
-			     int              *NODATA ) {
+int ReadOutputFiles ( char              ArcGrid,
+		      char             *GridFileName,
+		      double          **GridValues,
+		      double           *GridLat,
+		      double           *GridLng,
+		      int               nrows,
+		      int               ncols,
+		      double            minlat,
+		      double            minlng,
+		      double            cellsize,
+		      int               NODATA ) {
+/**********************************************************************
+  ReadOutputFiles       Keith Cherkauer           June 14, 2017
 
-  FILE *fin;
-  char idstr[250];
-  float MaxLat, MinLat, MaxLng, MinLng, tmplat, tmplng;
+  This subroutine opens an existing data file in ArcInfo Grid or XYZ
+  format, extracts it contents, and then checks that the data in the
+  file corresponds to that in the previously defined analysis domain.
 
-  if ( StatInfo.UseColFile )
-    sprintf(idstr, "%s_%s", StatInfo.ColNameList[cidx], 
-	    StatInfo.ColStatList[cidx]);
-  else 
-    sprintf(idstr, "%i", StatInfo.ColNumList[cidx] );	
-  if ( StatType == 'A' || StatType == 'P' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    idstr);
-  else if ( StatType == 'S' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    SeasonNames[date.season], idstr);
-  else if ( StatType == 'M' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    MonthNames[date.month-1], idstr);
-  else if ( StatType == 'W' )
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    date.doy, date.doy+6, idstr);
-  else 
-    sprintf(GridFileName[sidx][cidx], GridName, date.year, 
-	    date.doy, idstr);
+**********************************************************************/
+  int ErrNum, Ncells;
+  double *tmp_lat, *tmp_lng;
+  int tmp_nrows, tmp_ncols;
+  double tmp_ll_lat, tmp_ll_lng, tmp_cellsize;
+  int tmp_NODATA;
+  double **tmp_values;
+  int tmp_row, row, tmp_col, col, ridx, cidx, cell;
+  double lat, lng;
 
-  // Create blank file
-  if ( ( fin = fopen(GridFileName[sidx][cidx], "r") ) == NULL )
-    return (TRUE);
-  else {
-    MaxLat = -LARGE_CHK_VAL;
-    MinLat = +LARGE_CHK_VAL;
-    MaxLng = -LARGE_CHK_VAL;
-    MinLng = +LARGE_CHK_VAL;
-    while ( fscanf( fin,"%*s %f %f", &tmplat, &tmplng ) != EOF ) {
-      if (tmplat > MaxLat ) MaxLat = tmplat;
-      if (tmplat < MinLat ) MinLat = tmplat;
-      if (tmplng > MaxLng ) MaxLng = tmplng;
-      if (tmplng < MinLng ) MinLng = tmplng; 
+  // Read existing data array from output file
+  if ( ArcGrid ) {
+    /**** Reading from an ArcInfo grid file *****/
+    Ncells = read_arcinfo_grid(GridFileName, &tmp_lat, &tmp_lng, &tmp_ncols, 
+			       &tmp_nrows, &tmp_ll_lat, &tmp_ll_lng, 
+			       &tmp_cellsize, &tmp_NODATA, &tmp_values );
+    // Match coordinates from new input file with those already defined
+    if ( fabs( tmp_cellsize - cellsize ) > SMALL_CHK_VAL ) {
+      fprintf( stderr, "ERROR: Cellsize of %s (%f), does not match previously defined cellsize (%f).\n", GridFileName, tmp_cellsize, cellsize );
+      exit(FAIL);
     }
-
-    /***** THIS IS WHERE I WAS IN EDITING, WANT THIS TO ESTIMATE LAT AND LONG RANGE *****/
-    fclose ( fin ); 
-    return (FALSE);
+    // find input file upper left coordinate in original grid domain
+    tmp_col=0;
+    col = (int)((tmp_ll_lng + (double)tmp_col*tmp_cellsize - minlng) / cellsize);
+    if ( col < 0 ) {
+      tmp_col = col * -1;
+      col = 0;
+      if ( tmp_ncols - tmp_col > ncols ) {
+	fprintf( stderr, "ERROR: Not enough columns in the file being read, %s, to match existing domain.\n", GridFileName );
+	exit(FAIL);
+      }
+    } 
+    tmp_row = 0;
+    row = (tmp_ll_lat + (double)tmp_row*tmp_cellsize - minlat) / cellsize;
+    if ( row < 0 ) {
+      tmp_row = row * -1;
+      row = 0;
+      if ( tmp_nrows - tmp_row > nrows ) {
+	fprintf( stderr, "ERROR: Not enough rows in the file being read, %s, to match existing domain.\n", GridFileName );
+	exit(FAIL);
+      }
+    }
+    // copy new data into provided array
+    cell = 0;
+    for ( ridx = 0; ridx < nrows; ridx++ )
+      for ( cidx = 0; cidx < ncols; cidx++ ) {
+	if ( fabs( tmp_values[ridx+tmp_row][cidx+tmp_col] - tmp_NODATA ) < SMALL_CHK_VAL )
+	  // convert to standard no data value
+	  GridValues[ridx][cidx] = NODATA;
+	else
+	  // store current value
+	  GridValues[ridx][cidx] = tmp_values[ridx+tmp_row][cidx+tmp_col];
+	cell++;
+      }
+    Ncells = cell;
+  }
+  else {
+    /***** Read from an ASCII XYZ file *****/
+    Ncells = ReadXyzFiles(GridFileName, &tmp_lat, &tmp_lng, &tmp_ncols, 
+			  &tmp_nrows, &tmp_ll_lat, &tmp_ll_lng, 
+			  &tmp_cellsize, &tmp_NODATA, &tmp_values );
+    // Match coordinates from new input file with those already defined
+    cell = 0;
+    for ( tmp_row = 0; tmp_row < tmp_nrows; tmp_row++ ) {
+      for ( row = 0; row < nrows; row++ ) {
+	if ( ( fabs( GridLat[row] - tmp_lat[tmp_row] ) < SMALL_CHK_VAL ) &&
+	     ( fabs( GridLng[row] - tmp_lng[tmp_row] ) < SMALL_CHK_VAL ) ) {
+	  // found matching location, copy into provided data array
+	  GridValues[row][0] = tmp_values[tmp_row][0];
+	  cell++;
+	  break;
+	}
+      }
+    }
+    // Check that the correct number of cells were found
+    if ( cell < nrows ) {
+      fprintf( stderr, "ERROR: Too few lines (%i < %i) in XYZ file %s, cannot match new values to existing cells, so program is exiting.\n", cell, nrows, GridFileName );
+      exit(-1);
+    }
+    Ncells = cell;
   }
 
-  return(-1);
+  /***** free memory allocated for this subroutine *****/
+  free (tmp_lat);
+  free (tmp_lng);
+  for ( row = 0; row < tmp_nrows; row++ ) free (tmp_values[row]);
+  free(tmp_values);
+
+  return (Ncells);
 
 }
+
+int ReadXyzFiles ( char     *filename,
+		   double  **lat,
+		   double  **lng,
+		   int      *ncols,
+		   int      *nrows,
+		   double   *ll_lat,
+		   double   *ll_lng,
+		   double   *cellsize,
+		   int      *NODATA,
+		   double ***values ) {
+/**********************************************************************
+  ReadXyzFiles           Keith Cherkauer           June 14, 2017
+
+  This subroutine reads data from an XYZ ascii file and returns 
+  the central latitude and longitude of all grid cells that are not 
+  assigned the value of NODATA.  Routine returns the number of defined 
+  grid cells.  Data are stored to a two-dimensional array where first
+  index [row] is equal to the number of grid cells, and the second index
+  [col] is set to 1.  This maintains compatability with the output from
+  read_arcinfo_grid.
+
+**********************************************************************/
+
+  FILE   *fxyz;
+  int     row, col, i, j;
+  double  tmp_lat;
+  double  tmp_lng;
+  int     cell;
+  int     Ncells;
+  double  tmpvalue;
+  char    tmpstr[MaxCharData];
+
+  // Open input file
+  if ( ( fxyz = fopen( filename, "r" ) ) == NULL ) {
+    fprintf(stderr,"ERROR: Unable to open XYZ file %s for reading.\n",filename);
+    return(FAIL);
+  }
+
+  // Count number of lines in the input file
+  Ncells=0;
+  while ( fgets(tmpstr, MaxCharData, fxyz) != NULL ) Ncells++;
+  rewind(fxyz);
+  (*nrows) = Ncells;
+  (*ncols) = 1;
+
+  // Allocate memory for data storage
+  (*lat) = (double *)calloc(Ncells,sizeof(double));
+  (*lng) = (double *)calloc(Ncells,sizeof(double));
+  (*values) = (double **)calloc(Ncells,sizeof(double *));
+  for ( j = 0; j < (*nrows); j++ )
+    (*values)[j] = (double *)calloc(1,sizeof(double));
+
+  // Write data to output file
+  for ( row = 0; row < Ncells; row++ )
+    fscanf( fxyz, "%f %f %f\n", &lng[row], &lat[row], &values[row][0] );
+
+  // close output file
+  fclose(fxyz);
+
+  return (Ncells);
+
+}
+
 

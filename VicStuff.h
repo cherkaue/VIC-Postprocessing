@@ -64,7 +64,8 @@ typedef struct {
   int *ColNumList;
   int MaxColNum;
   int Ncols;
-  float *Thres;
+  int Nthres;
+  double ***Thres;
 } StatInfoStruct; // structure for storing information on summary statistics
 
 typedef struct {
