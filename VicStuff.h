@@ -85,8 +85,9 @@ int get_header_ASCII( gzFile **, char ***, char **, double **, char **, int *, i
 		int *, int *, int *, int *, int *, int * );
 int get_header_BINARY( gzFile **, char ***, char **, double **, char **, int *, int *, 
 		int *, int *, int *, int *, int *, int * );
-int    get_record_PEN( int, char **, int *, char **, char *, double *, int *, double *, 
-		       int, int, int *, int, PenInfoStruct, int, PenInfoStruct );
+int    get_record_PEN( int, char **, int *, char **, char *, double *, int *, 
+		       double *, int, int, int *, int, PenInfoStruct, int, 
+		       PenInfoStruct, int, PenInfoStruct );
 int    get_record_ASCII( char **, int *, char **, char *, double *, int *, double *, int, 
 		       int * );
 int    get_record_BINARY( char **, int *, char **, char *, double *, int *, double *, int, 

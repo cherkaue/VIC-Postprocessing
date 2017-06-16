@@ -185,6 +185,29 @@ double get_average_days_over_thres(double *values, double thres, int N, double N
 
 }
 
+double get_average_value_over_thres(double *values, double thres, int N, double NoData) {
+  // computes the average value of events over a threshold
+
+  int index;
+  int count;
+  double sum;
+
+  sum=0;
+  count=0;
+  for(index=0;index<N;index++) {
+    if(values[index]!=NoData) {
+      if(values[index]>thres) {
+	sum+=(values[index]-thres);
+	count++;
+      }
+    }
+  }
+  
+  if ( count == 0 ) return (NoData);
+  else return (sum/(double)count);
+
+}
+
 int get_consecutive_days_over_thres(double *values, double thres, int N, double NoData) {
   // computes the number of records under a threshold between first and last occurance identifeid from the middle of the record (e.g., growing sesason between first and last frost)
 
@@ -245,6 +268,29 @@ double get_average_days_under_thres(double *values, double thres, int N, double 
   }
   
   return ((double)sum/(double)count);
+
+}
+
+double get_average_value_under_thres(double *values, double thres, int N, double NoData) {
+  // computes the average value of events under a threshold
+
+  int index;
+  double sum;
+  int count;
+
+  sum=0;
+  count=0;
+  for(index=0;index<N;index++) {
+    if(values[index]!=NoData) {
+      if(values[index]<thres) {
+	sum+=thres-values[index];
+	count++;
+      }
+    }
+  }
+
+  if ( count == 0 ) return (NoData);
+  else return (sum/(double)count);
 
 }
 

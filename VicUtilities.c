@@ -425,7 +425,9 @@ int get_record_PEN( int            BinaryFile,
 		    int            CalcPE,
 		    PenInfoStruct  PenInfo,
 		    int            CalcTR,
-		    PenInfoStruct  TRoffInfo ) {
+		    PenInfoStruct  TRoffInfo,
+		    int            CalcTSM,
+		    PenInfoStruct  TSMInfo ) {
   /********************************************************************************
     Makes sure that the correct get_record function is called based on the type
     of data file being processed.
@@ -480,6 +482,10 @@ int get_record_PEN( int            BinaryFile,
   /***** Compute total runoff and add to data[cidx] *****/
   if ( CalcTR )
     data[TRoffInfo.ColNumList[2]] = data[TRoffInfo.ColNumList[0]] + data[TRoffInfo.ColNumList[1]];
+
+  /***** Compute total soil moisture and add to data[cidx] *****/
+  if ( CalcTSM )
+    data[TSMInfo.ColNumList[3]] = data[TSMInfo.ColNumList[0]] + data[TSMInfo.ColNumList[1]] + data[TSMInfo.ColNumList[2]];
 
   return (0);
 
