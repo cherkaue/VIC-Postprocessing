@@ -39,6 +39,8 @@
 
 #define MaxCharData 5000 // Maximum number of characters per line of ASCII input file.
 
+#define SPACE " \t\r\n"
+
 /***** Output BINARY format types (from vicNl_def.h) *****/
 #define OUT_TYPE_DEFAULT 0 /* Default data type */
 #define OUT_TYPE_CHAR    1 /* chaßßr */
@@ -66,6 +68,7 @@ typedef struct {
   int Ncols;
   int Nthres;
   double ***Thres;
+  double ***Extra;
 } StatInfoStruct; // structure for storing information on summary statistics
 
 typedef struct {
@@ -93,11 +96,8 @@ int    get_record_ASCII( char **, int *, char **, char *, double *, int *, doubl
 int    get_record_BINARY( char **, int *, char **, char *, double *, int *, double *, int, 
 			  int * );
 char GetVarAggType( char * );
-/***
-int    get_header_NEW( gzFile  **fin, char ***, char **, float **, char **, 
-		       int *, int *, int *, int *, int *, int *, int *, int * );
-int    get_record_NEW( char *, int *, char **, char *, float *, int *, float *, int, 
-		       int * );
-***/
 char *get_next_string(char *, int *, char );
 char *reset_spaces( char * );
+void strip(char *);
+char *strip_copy(char *);
+

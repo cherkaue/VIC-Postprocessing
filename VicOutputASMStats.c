@@ -1,16 +1,24 @@
 #include <VicStuff.h>
 
 // get information from the staistics control file
-int GetStatInfo( char *, StatInfoStruct *, char **, int, int *, int *, int *, int *, int *, char, double *, double *, int, int, double, double, double, int );
+int GetStatInfo( char *, StatInfoStruct *, char **, int, int *, int *, int *, int *, int *, int *, int *, int *, int *, char, double *, double *, int, int, double, double, double, int );
 // get special information for calculating supplemental output variables
 int GetPenmanInfo( PenInfoStruct *, char **, int );
 int GetTotalRunoffInfo( PenInfoStruct *, char **, int );
-int GetTotalSoilMoistureInfo( PenInfoStruct *, char **, int );
+int GetTotalSoilMoistureInfo( PenInfoStruct *, char **, int, int );
 int GetModifiedGrowingDegreeDayInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int GetPlantingDayInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
 int GetChillingHoursInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int GetBudFreezeInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int GetDrainModWorkingDaysInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
+int GetDaysSuitable4FieldWorkInfo( PenInfoStruct *, StatInfoStruct *, char **, int );
 // Functions for computing supplemental output variables
 int CalcModifiedGrowingDegreeDays( double *, double *, double *, DATE_STRUCT, int );
+int CalcPlantingDay( double *, double *, double *, double, DATE_STRUCT, int );
 int CalcChillingHours( double *, double *, double *, DATE_STRUCT, int );
+int CalcBudFreeze( double *, double *, double *, DATE_STRUCT, int );
+int CalcDrainModWorkingDays( double *, double *, double *, double, DATE_STRUCT, int );
+int CalcDaysSuitable4FieldWork( double *, double *, double *, double *, DATE_STRUCT, int );
 // File handling routines
 char CheckExistingOutputFiles ( char, char, char *, StatInfoStruct, char ***, 
 				DATE_STRUCT, int, int, int, int, int, 
@@ -98,6 +106,9 @@ int main(int argc, char *argv[]) {
     simulations.  Probably also need to add OUT_TOTAL_SOIL_ICE.  KAC
   2017-Jun-16 Added new statistics to compute the average value of
     events over or under a threshold AVG(event - threshold).    KAC
+  2017-Jun-20 Additional variable calculations have been added, and
+    TOTAL_SOIL_MOISTURE has been updated to work with any number of
+    soil layers, as defined in the VIC model output header.   KAC
 
   NOTE: As of 2017-Jun-12 - Support for XYZ files has not been checked.  KAC
   NOTE: As of 2017-Jun-12 - Support for no Overwrite is not completed.  KAC
@@ -105,8 +116,15 @@ int main(int argc, char *argv[]) {
 ***********************************************************************/
 
   StatInfoStruct StatInfo;
-  PenInfoStruct PenInfo, TRoffInfo, TSMInfo, MGDDInfo, ChillHrInfo;
 
+  // variables that must be adjusted when adding a new calculated column
+  PenInfoStruct PenInfo, TRoffInfo, TSMInfo, MGDDInfo, PDayInfo, ChillHrInfo;
+  PenInfoStruct BudFreezeInfo, DModWDaysInfo, DSFWInfo;
+  int     CalcPE, CalcTR, CalcTSM, CalcMGDD, CalcPD, CalcCH, CalcBF;
+  int     CalcDMWD, CalcDSFW;
+  int     NumExtraCalcs=9; // Number of extra calculations possible, e.g., OUT_PE
+
+  // other general variables
   gzFile *fin;
   FILE *flist;
 
@@ -169,11 +187,8 @@ int main(int argc, char *argv[]) {
   int    *date;
   double  *data;
   int     BinaryFile, lidx;
-  int     CalcPE, CalcTR, CalcTSM, CalcMGDD, CalcCH;
   int     periodyear[2];
   
-  int     NumExtraCalcs=4; // Number of extra calculations possible, e.g., OUT_PE
-
   date      = (int *)calloc(NUM_DATE_VALS,sizeof(int));
 
   /** Process Command Line Arguments **/
@@ -181,8 +196,16 @@ int main(int argc, char *argv[]) {
     fprintf (stderr, "NumVars = %i\n", argc );
     fprintf(stderr,"\nUsage: %s <file list file> <Output ArcGrid: TRUE/FALSE> <output prefix> <grid resolution> <column list file> <start date> <end date> <V|A|S|M|W|D> <OVERWRITE: TRUE/FALSE> <PrtAllPeriods: TRUE/FALSE>\n",argv[0]);
     fprintf(stderr,"\n\tThis program produces either an ARC/INFO ASCII grid file \n\t(output ArcGrid = T) or an XYZ file (Output ArcGrid = F) of the average\n\tof the selected data column for the given time period.\n\n");
-    fprintf(stderr,"\tThe following additional variables can be calculated by this \n\tprogram, and used with the standard list of summary metrics, the \n\trequired columns are in the VIC files being processed.  \n\tAdd the variable names below to your statistics control file \n\tto include them in the analysis:\n\t- OUT_PE Penman potential evaporation, requires \"OUT_R_NET\", \n\t  \"OUT_GRND_FLUX\", \"OUT_WIND\", \"OUT_SURF_TEMP\", \"OUT_REL_HUMID\", \n\t  \"OUT_AIR_TEMP\",\n\t- OUT_TOTAL_RUNOFF is the sum of \"OUT_RUNOFF\" and \"OUT_BASEFLOW\",\n\t- OUT_TOTAL_SOIL_MOIST is the sum of \"OUT_SOIL_MOIST\" for each layer,\n\t- OUT_MGDD modified growing degree day (from mrcc.isws.illinois.edu), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\",\n\t- OUT_CHILL_HR is the number of chilling hours (fruit trees), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\".\n\n");
-    fprintf(stderr,"\n\t<file list> is a file containing the full grid file name and location, \n\t\tlatitude and longitude of the grid cell, for each grid cell to be\n\t\tincluded.\n");
+    fprintf(stderr,"\tThe following additional variables can be calculated by this \n\tprogram, and used with the standard list of summary metrics, the \n\trequired columns are in the VIC files being processed.  \n\tAdd the variable names below to your statistics control file \n\tto include them in the analysis:\n");
+    fprintf(stderr,"\t- OUT_PE Penman potential evaporation, requires \"OUT_R_NET\", \n\t  \"OUT_GRND_FLUX\", \"OUT_WIND\", \"OUT_SURF_TEMP\", \"OUT_REL_HUMID\", \n\t  \"OUT_AIR_TEMP\",\n");
+    fprintf(stderr,"\t- OUT_TOTAL_RUNOFF is the sum of \"OUT_RUNOFF\" and \"OUT_BASEFLOW\",\n");
+    fprintf(stderr,"\t- OUT_TOTAL_SOIL_MOIST is the sum of \"OUT_SOIL_MOIST\" for each layer,\n");
+    fprintf(stderr,"\t- OUT_MGDD modified growing degree day (from mrcc.isws.illinois.edu), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\",\n");
+    fprintf(stderr,"\t- OUT_PLANT_DAY is a Boolean variable indicating whether or not soil \n\t  surface conditions support planting, requires \"OUT_SOIL_MOIST_0\" \n\t  and \"OUT_SOIL_TEMP_0\".  Also requires that a file with top soil \n\t  layer fiedl capacity [mm] be provided following the statistic \n\t  definition in the soil control file.\n");
+    fprintf(stderr,"\t- OUT_CHILL_HR is the number of chilling hours (fruit trees), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\".\n");
+    fprintf(stderr,"\t- OUT_DMWD is the number of working days defined by DRAINMOD, \n\t  requires \"OUT_PREC\" and \"OUT_SOIL_MOIST_0\".  Also requires that \n\t  a file with top soil layer saturation [mm] be provided following \n\t  the statistic definition in the soil control file.\n");
+    fprintf(stderr,"\t- OUT_DSFW is the number of of days suitable for field work \n\t  (Gramig et al, 2017), requires \"IN_PREC\", \"IN_TMIN\", \"IN_TMAX\", \n\t  and \"Soil Drainge Class\".\n");
+    fprintf(stderr,"\t<file list> is a file containing the full grid file name and location, \n\t\tlatitude and longitude of the grid cell, for each grid cell to be\n\t\tincluded.\n");
     fprintf(stderr,"\t<output prefix> is the prefix (path and start of file name) for the \n\t\toutput files that will be generated by this program.  A suffix \n\t\twill be added to all file names to separate individual output \n\t\tfor each variable, and for each tperiod (year, season, month, \n\t\tetc). Files containing multi-year average statistics for annual, \n\t\tseasonal and monthly periods will use \"9999\" for \n\t\tthe date in the file name.\n");
     fprintf(stderr,"\t<grid resolution> is the resolution in degrees of the desired output\n\t\tgrid.\n");
     fprintf(stderr,"\t<column list file> is a multi-column ASCII file that lists the column\n\t\tname for each column to be output.  Followed by the statistic \n\t\tto be computed and a thresehold if required by the statistic.  \n\n\t\tStatistic options include: \n\t\t- Mean value \t\t\t\t\'mean\', \n\t\t- Cumulative value \t\t\t\'sum\', \n\t\t- Standard Deviation \t\t\t\'stdev\', \n\t\t- Maximum value \t\t\t\'max\', \n\t\t- Minimum value \t\t\t\'min\', \n\t\t- First value \t\t\t\t\'first\', \n\t\t- Last value \t\t\t\t\'last\', \n\t\t- Last day over thres.\t\t\t\'ldayo\' <thres>, \n\t\t- Last day under thres.\t\t\t\'ldayu\' <thres>, \n\t\t- First day over thres.\t\t\t\'fdayo\' <thres>, \n\t\t- First day under thres.\t\t\'fdayu\' <thres>, \n\t\t- Days over threshold\t\t\t\'othres\' <thres>,\n\t\t- Days under threshold\t\t\t\'uthres\' <thres>,\n\t\t- Average days over threshold\t\t\'avgdaysothres\' <thres>,\n\t\t- Average days under threshold\t\t\'avgdaysuthres\' <thres>,\n\t\t- Average value over threshold\t\t\'avgvalothres\' <thres>,\n\t\t- Average value under threshold\t\t\'avgvaluthres\' <thres>,\n\t\t- Consecutive days over threshold\t\'daysothres\' <thres>,\n\t\t- Consecutive days under threshold\t\'daysuthres\' <thres>,\n\t\t- Last day over thres before middle\t\'ldaymido\' <thres>,\n\t\t- Last day under thres before middle\t\'ldaymidu\' <thres>,\n\t\t- First day over thres after middle\t\'fdaymido\' <thres>,\n\t\t- First day under thres after middle\t\'fdaymidu\' <thres>,\n\t\t- Number of times threshold is crossed\t\'crossthres\' <thres>,\n\t\t- RB Index (flashiness)\t\t\t\'RBI\',\n\t\t- TQ mean (days spent above mean)\t\'Tqmean\',\n\t\t- Seven day low value\t\t\t\'7daylow\',\n\t\t- Quantile value\t\t\t\'quan\' <quantile>.\n\n");
@@ -271,6 +294,9 @@ int main(int argc, char *argv[]) {
 			   &NumBands, &NumFrostFronts, &NumLakeNodes, 
 			   &NumCols, &NumBytes );
   ColNames = (char **)realloc(ColNames,(NumCols+NumExtraCalcs)*sizeof(char *));
+
+  /***** Add Additional Columns for Calculation *****/
+
   // set OUT_PE as a column name
   ColNames[NumCols] = (char *)calloc( 7, sizeof(char) );
   strcpy( ColNames[NumCols], "OUT_PE" );
@@ -279,13 +305,28 @@ int main(int argc, char *argv[]) {
   strcpy( ColNames[NumCols+1], "OUT_TOTAL_RUNOFF" );
   // set OUT_TOTAL_SOIL_MOIST as a column name
   ColNames[NumCols+2] = (char *)calloc( 17, sizeof(char) );
-  strcpy( ColNames[NumCols+1], "OUT_TOTAL_SOIL_MOIST" );
+  strcpy( ColNames[NumCols+2], "OUT_TOTAL_SOIL_MOIST" );
   // set OUT_MGDD as a column name
   ColNames[NumCols+3] = (char *)calloc( 9, sizeof(char) );
-  strcpy( ColNames[NumCols+2], "OUT_MGDD" );
-  // set OUT_CHILL_HR as a column name
+  strcpy( ColNames[NumCols+3], "OUT_MGDD" );
+  // set OUT_PLANT_DAY as a column name
   ColNames[NumCols+4] = (char *)calloc( 13, sizeof(char) );
-  strcpy( ColNames[NumCols+3], "OUT_CHILL_HR" );
+  strcpy( ColNames[NumCols+4], "OUT_PLANT_DAY" );
+  // set OUT_CHILL_HR as a column name
+  ColNames[NumCols+5] = (char *)calloc( 13, sizeof(char) );
+  strcpy( ColNames[NumCols+5], "OUT_CHILL_HR" );
+  // set OUT_BUD_FREEZE as a column name
+  ColNames[NumCols+6] = (char *)calloc( 14, sizeof(char) );
+  strcpy( ColNames[NumCols+6], "OUT_BUD_FREEZE" );
+  // set OUT_DMWD as a column name
+  ColNames[NumCols+7] = (char *)calloc( 8, sizeof(char) );
+  strcpy( ColNames[NumCols+7], "OUT_DMWD" );
+  // set OUT_DSFW as a column name
+  ColNames[NumCols+8] = (char *)calloc( 8, sizeof(char) );
+  strcpy( ColNames[NumCols+8], "OUT_DSFW" );
+
+  /***** Check for VIC model output file time step *****/
+
   // check for hourly column in dataset
   if ( strcmp( ColNames[3], "HOUR" ) == 0 ) { // hour is present offset by one column
     OutStart = 4;
@@ -309,9 +350,10 @@ int main(int argc, char *argv[]) {
 
   /** Read statistics control file **/
   ErrNum = GetStatInfo( argv[5], &StatInfo, VarList, NumOut, &CalcPE, 
-			&CalcTR, &CalcTSM, &CalcMGDD, &CalcCH, ArcGrid, 
-			GridLat, GridLng, nrows, ncols, minlat, minlng, 
-			cellsize, NODATA );
+			&CalcTR, &CalcTSM, &CalcMGDD, &CalcPD, &CalcCH, 
+			&CalcBF, &CalcDMWD, &CalcDSFW, ArcGrid, GridLat, 
+			GridLng, nrows, ncols, minlat, minlng, cellsize, 
+			NODATA );
 
   /** Setup for calculation of PE **/
   if ( CalcPE )
@@ -323,7 +365,7 @@ int main(int argc, char *argv[]) {
 
   /** Setup for calculation of total soil moisture (all soil moisture layers) **/
   if ( CalcTSM )
-    CalcTSM = GetTotalSoilMoistureInfo( &TSMInfo, VarList, NumOut );
+    CalcTSM = GetTotalSoilMoistureInfo( &TSMInfo, VarList, NumOut, NumLayers );
 
   /** Setup for calculation of modified growing degree day (Tmin and Tmax) **/
   if ( CalcMGDD )
@@ -332,6 +374,15 @@ int main(int argc, char *argv[]) {
     else {
       fprintf( stderr, "MGDD not computed because period must be annual.\n" );
       CalcMGDD = 0;
+    }
+
+  /** Setup for calculation of first planting day (Soil Surface Temp and Moisture) **/
+  if ( CalcPD )
+    if ( StatType == 'A' || StatType == 'P' )
+      CalcPD = GetPlantingDayInfo( &PDayInfo, &StatInfo, VarList, NumOut );
+    else {
+      fprintf( stderr, "Planting Day not computed because period must be annual.\n" );
+      CalcPD = 0;
     }
 
   /** Setup for calculation of chilling hours using Tmin and Tmax **/
@@ -343,6 +394,26 @@ int main(int argc, char *argv[]) {
       fprintf( stderr, "Chilling Hours not computed because period must be annual.\n" );
       CalcCH = 0;
     }
+
+  /** Setup for calculation of bud freeze potential **/
+  if ( CalcBF )
+    if ( StatType == 'A' || StatType == 'P' ) {
+      CalcCH = GetBudFreezeInfo( &BudFreezeInfo, &StatInfo, VarList, NumOut );
+    }
+    else {
+      fprintf( stderr, "Bud Freeze potential not computed because period must be annual.\n" );
+      CalcCH = 0;
+    }
+
+  /** Setup for calculation of DRAINMOD working days using PREC and surface MOIST **/
+  if ( CalcDMWD )
+    CalcDMWD = GetDrainModWorkingDaysInfo( &DModWDaysInfo, &StatInfo, VarList, NumOut );
+  else CalcDMWD = FALSE;
+
+  /** Setup for calculation of DSFW using PREC, TMIN, TMAX and drainage class **/
+  if ( CalcDSFW )
+    CalcDSFW = GetDaysSuitable4FieldWorkInfo( &DSFWInfo, &StatInfo, VarList, NumOut );
+  else CalcDSFW = FALSE;
 
   /** Check that requested columns are in the given output files **/
   for ( didx=NumOut-1; didx>=0; didx-- ) {
@@ -787,7 +858,7 @@ int main(int argc, char *argv[]) {
 	    }
 	  }
 	  Nrec = 0;
-      }
+	}
 	else if ( tmpdate.juldate >= nextdate.juldate && sidx >= 0 ) {
 	  // process next set (annual, seasonal, monthly, etc) of data
 	  Nvals = (int)(nextdate.juldate+0.5)-(int)(lastdate.juldate+0.5);
@@ -803,6 +874,19 @@ int main(int argc, char *argv[]) {
 		gridval[MGDDInfo.OutputCols[cidx]][didx] 
 		  = gridval[MGDDInfo.ColNumList[2]][didx];
 	  }
+	  // calculate first day of planting, if possible
+	  if ( CalcPD ) {
+	    CalcPlantingDay( gridval[PDayInfo.ColNumList[2]], 
+			     gridval[PDayInfo.ColNumList[0]], 
+			     gridval[PDayInfo.ColNumList[1]], 
+			     StatInfo.Extra[PDayInfo.OutputCols[0]][row][col], 
+			     lastdate, Nvals );
+	    for ( cidx = 1; cidx < PDayInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[PDayInfo.OutputCols[PDayInfo.OutputCols[0]]][didx] 
+		  = gridval[PDayInfo.ColNumList[2]][didx];
+	  }
 	  // calculate chilling hours, if possible
 	  if ( CalcCH ) {
 	    CalcChillingHours( gridval[ChillHrInfo.ColNumList[2]], 
@@ -814,6 +898,44 @@ int main(int argc, char *argv[]) {
 	      for ( didx = 0; didx < Nvals; didx++ )
 		gridval[ChillHrInfo.OutputCols[cidx]][didx] 
 		  = gridval[ChillHrInfo.ColNumList[2]][didx];
+	  }
+	  // calculate bud freeze potential, if possible
+	  if ( CalcBF ) {
+	    CalcBudFreeze( gridval[BudFreezeInfo.ColNumList[2]], 
+			   gridval[BudFreezeInfo.ColNumList[0]], 
+			   gridval[BudFreezeInfo.ColNumList[1]], 
+			   lastdate, Nvals );
+	    for ( cidx = 1; cidx < BudFreezeInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[BudFreezeInfo.OutputCols[cidx]][didx] 
+		  = gridval[BudFreezeInfo.ColNumList[2]][didx];
+	  }
+	  // calculate DRAINMOD working days, if possible
+	  if ( CalcDMWD ) {
+	    CalcDrainModWorkingDays( gridval[DModWDaysInfo.ColNumList[2]], 
+				     gridval[DModWDaysInfo.ColNumList[0]], 
+				     gridval[DModWDaysInfo.ColNumList[1]], 
+				     StatInfo.Extra[DModWDaysInfo.OutputCols[0]][row][col], 
+				     lastdate, Nvals );
+	    for ( cidx = 1; cidx < DModWDaysInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[DModWDaysInfo.OutputCols[DModWDaysInfo.OutputCols[0]]][didx] 
+		  = gridval[DModWDaysInfo.ColNumList[2]][didx];
+	  }
+	  // calculate Days Suitable for Field Work (DSFW), if possible
+	  if ( CalcDSFW ) {
+	    CalcDaysSuitable4FieldWork( gridval[DSFWInfo.ColNumList[3]], 
+					gridval[DSFWInfo.ColNumList[0]], 
+					gridval[DSFWInfo.ColNumList[1]], 
+					gridval[DSFWInfo.ColNumList[2]], 
+					lastdate, Nvals );
+	    for ( cidx = 1; cidx < DSFWInfo.Noutput; cidx++ )
+	      // extra values, so copy statistic
+	      for ( didx = 0; didx < Nvals; didx++ )
+		gridval[DSFWInfo.OutputCols[cidx]][didx] 
+		  = gridval[DSFWInfo.ColNumList[2]][didx];
 	  }
 	  // now process all requested output statistics
 	  for ( cidx = 0; cidx < StatInfo.Ncols; cidx++ ) {
@@ -850,11 +972,11 @@ int main(int argc, char *argv[]) {
 	      // Count all days a value is under the given threshold
 	      GridValues[sidx][cidx][row][col] = (double)get_average_days_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
-	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgvalothres", 13 ) == 0 ) {
+	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgvalothres", 12 ) == 0 ) {
 	      // average value of events over the given threshold
 	      GridValues[sidx][cidx][row][col] = (double)get_average_value_over_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
-	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgvaluthres", 13 ) == 0 ) {
+	    else if ( strncasecmp( StatInfo.ColStatList[cidx], "avgvaluthres", 12 ) == 0 ) {
 	      // average value of events under the given threshold
 	      GridValues[sidx][cidx][row][col] = (double)get_average_value_under_thres(gridval[cidx], StatInfo.Thres[cidx][row][col], Nvals, (double)NODATA);
 	    }
@@ -1104,7 +1226,11 @@ int GetStatInfo( char            *StatInfoParam,
 		 int             *CalcTR, 
 		 int             *CalcTSM, 
 		 int             *CalcMGDD, 
+		 int             *CalcPD, 
 		 int             *CalcCH,
+		 int             *CalcBF,
+		 int             *CalcDMWD,
+		 int             *CalcDSFW,
 		 char             ArcGrid, 
 		 double          *GridLat,
 		 double          *GridLng,
@@ -1133,6 +1259,7 @@ int GetStatInfo( char            *StatInfoParam,
   int cidx, idx, tidx, Ncols, row, col, tmpCells;
   char tmpstr[MaxCharData], chkFile[MaxCharData];
   char shortName[MaxCharData], thresName[MaxCharData];
+  char *last, *token;
   double tmpThres;
 
   // Open column statistics definition file
@@ -1153,11 +1280,15 @@ int GetStatInfo( char            *StatInfoParam,
   StatInfo->ColNameList = (char **)calloc(StatInfo->Ncols,sizeof(char *));
   StatInfo->ColStatList = (char **)calloc(StatInfo->Ncols,sizeof(char *));
   StatInfo->Thres       = (double ***)calloc(StatInfo->Ncols,sizeof(double**));
+  StatInfo->Extra       = (double ***)calloc(StatInfo->Ncols,sizeof(double**));
   for ( cidx=0; cidx < StatInfo->Ncols; cidx++ ) {
     // allocate space for gridded threshold values
     StatInfo->Thres[cidx] = (double **)calloc(nrows,sizeof(double*));
-    for ( row = 0; row < nrows; row++ )
+    StatInfo->Extra[cidx] = (double **)calloc(nrows,sizeof(double*));
+    for ( row = 0; row < nrows; row++ ) {
       StatInfo->Thres[cidx][row] = (double *)calloc(ncols,sizeof(double));
+      StatInfo->Extra[cidx][row] = (double *)calloc(ncols,sizeof(double));
+    }
   }
   StatInfo->MaxColNum   = -9;
   Ncols = 0;
@@ -1174,6 +1305,7 @@ int GetStatInfo( char            *StatInfoParam,
 	 || strncasecmp( StatInfo->ColStatList[cidx], "days", 4 ) == 0 
 	 || strncasecmp( StatInfo->ColStatList[cidx], "crossthres", 10 ) == 0
 	 || strncasecmp( StatInfo->ColStatList[cidx], "avgdays", 7 ) == 0
+	 || strncasecmp( StatInfo->ColStatList[cidx], "avgval", 6 ) == 0
 	 || strncasecmp( StatInfo->ColStatList[cidx], "quan", 4 ) == 0 ) {
       // check if threshold is a file
       sscanf( tmpstr, "%*s %*s %s", chkFile );
@@ -1202,6 +1334,22 @@ int GetStatInfo( char            *StatInfoParam,
 
       }
     }
+    // check if requested variable requires additional input to be computed
+    if ( ( strncasecmp( StatInfo->ColNameList[cidx], "OUT_DMWD", 8 ) == 0 ) ||
+	 ( strncasecmp( StatInfo->ColNameList[cidx], "OUT_PLANT_DAY", 13 ) == 0 ) ) {
+      last = token = strtok(tmpstr, " ");
+      for (;(token = strtok(NULL, " ")) != NULL; last = token);
+      last = strip_copy(last);
+      // read spatially distributed thresholds from existing file
+      tmpCells = ReadOutputFiles( ArcGrid, last, StatInfo->Extra[cidx],
+				  GridLat, GridLng, nrows, ncols, minlat,
+				  minlng, cellsize, NODATA);
+      if ( tmpCells != nrows*ncols ) {
+	fprintf( stderr, "ERROR: Number of cells from threshold file does not match the number defined for the current domain.\n" );
+	exit (FAIL);
+      }
+    }
+    // Make sure that request variable is in the input file
     for ( idx = 0; idx < NumCols; idx++ ) {
       if ( strcasecmp( ColNames[idx], StatInfo->ColNameList[cidx] ) == 0 ) {
 	StatInfo->ColNumList[cidx] = idx;
@@ -1228,7 +1376,8 @@ int GetStatInfo( char            *StatInfoParam,
   StatInfo->Ncols -= Ncols;
 
   // check if any special calculations have been requested
-  (*CalcPE) = (*CalcTR) = (*CalcTSM) = (*CalcMGDD) = (*CalcCH) = FALSE;
+  (*CalcPE) = (*CalcTR) = (*CalcTSM) = (*CalcMGDD) = (*CalcPD) = FALSE;
+  (*CalcCH) = (*CalcBF) = (*CalcDMWD) = (*CalcDSFW) = FALSE;
   for ( cidx = StatInfo->Ncols-1; cidx >= 0; cidx-- ) {
     if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_PE" ) == 0 ) 
       (*CalcPE) = TRUE;
@@ -1238,8 +1387,16 @@ int GetStatInfo( char            *StatInfoParam,
       (*CalcTSM) = TRUE;
     if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_MGDD" ) == 0 ) 
       (*CalcMGDD) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_PLANT_DAY" ) == 0 ) 
+      (*CalcPD) = TRUE;
     if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_CHILL_HR" ) == 0 ) 
       (*CalcCH) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_BUD_FREEZE" ) == 0 ) 
+      (*CalcBF) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_DMWD" ) == 0 ) 
+      (*CalcDMWD) = TRUE;
+    if ( strcasecmp( StatInfo->ColNameList[cidx], "OUT_DSFW" ) == 0 ) 
+      (*CalcDSFW) = TRUE;
   }
 
   return(0);
@@ -1348,7 +1505,8 @@ int GetTotalRunoffInfo( PenInfoStruct  *TRoffInfo,
 
 int GetTotalSoilMoistureInfo( PenInfoStruct  *TSMInfo, 
 			      char          **ColNames, 
-			      int             NumCols ) {
+			      int             NumCols,
+			      int             NumLayers ) {
 /**********************************************************************
   GetTotalSoilMoistureInfo     Keith Cherkauer           June 16, 2017
 
@@ -1364,16 +1522,25 @@ int GetTotalSoilMoistureInfo( PenInfoStruct  *TSMInfo,
 **********************************************************************/
 
   // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total soil moisture!
-  static char *TotalSoilMoistureList[] = { "OUT_SOIL_MOIST_0", "OUT_SOIL_MOIST_1", "OUT_SOIL_MOIST_2", "OUT_TOTAL_SOIL_MOIST" };
+  static char **TotalSoilMoistureList;
+  char tmpstr[30];
 
   int cidx, idx;
 
   // Determine columns to be processed
-  TSMInfo->Ncols = 3;
+  TSMInfo->Ncols = NumLayers+1;
   TSMInfo->ColNumList  = (int *)calloc(TSMInfo->Ncols,sizeof(int));
   TSMInfo->ColNameList = (char **)calloc(TSMInfo->Ncols,sizeof(char *));
   TSMInfo->MaxColNum   = -9;
  
+  // define column names - DO NOT MODIFY THIS LIST - unless you are also changing the calculation
+  TotalSoilMoistureList = (char **)calloc( TSMInfo->Ncols, sizeof(char *) );
+  for ( idx = 0; idx < TSMInfo->Ncols; idx++ ) 
+    TotalSoilMoistureList[idx] = (char *)calloc( 30, sizeof(char) );
+  strcpy( TotalSoilMoistureList[NumLayers], "OUT_TOTAL_SOIL_MOIST" );
+  for ( idx = 0; idx < NumLayers; idx++ )
+    sprintf( TotalSoilMoistureList[idx], "OUT_SOIL_MOIST_%i", idx );
+
  for ( cidx = 0; cidx < TSMInfo->Ncols; cidx++ ) {
    TSMInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
    strcpy( TSMInfo->ColNameList[cidx], TotalSoilMoistureList[cidx] );
@@ -1530,6 +1697,110 @@ int CalcModifiedGrowingDegreeDays( double      *MGDD,
 
 }
 
+int GetPlantingDayInfo( PenInfoStruct   *PDayInfo, 
+			StatInfoStruct  *StatInfo, 
+			char           **ColNames, 
+			int              NumCols ) {
+/**********************************************************************
+  GetPlantingDayInfo     Keith Cherkauer           June 19, 2017
+
+
+  Modifications
+  2017-May-30 Copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
+
+  // DO NOT MODIFY THIS LIST - unless you are also changing the calculation!
+  static char *PDayList[] = { "OUT_SOIL_TEMP_0", "OUT_SOIL_MOIST_0", "OUT_PLANT_DAY" };
+
+  int cidx, sidx, idx;
+
+  // Determine columns to be processed
+  PDayInfo->Ncols = 3;
+  PDayInfo->ColNumList  = (int *)calloc(PDayInfo->Ncols,sizeof(int));
+  PDayInfo->ColNameList = (char **)calloc(PDayInfo->Ncols,sizeof(char *));
+  PDayInfo->MaxColNum   = -9;
+
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < PDayInfo->Ncols; cidx++ ) {
+    PDayInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( PDayInfo->ColNameList[cidx], PDayList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], PDayInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      PDayInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], PDayInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Modified Growing Degree Day calculation not found, so will not be computed.\n" );
+	PDayInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], PDayInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      PDayInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( PDayInfo->ColNumList[cidx] > PDayInfo->MaxColNum ) 
+      PDayInfo->MaxColNum = PDayInfo->ColNumList[cidx]+1;
+  }
+
+  // check is the calculated statistics is in Statinfo more than once
+  PDayInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  PDayInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], PDayInfo->ColNameList[PDayInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      PDayInfo->OutputCols[PDayInfo->Noutput] = sidx;
+      PDayInfo->Noutput++;
+    }
+  }
+
+  return (TRUE);
+
+}
+
+int CalcPlantingDay( double      *PDay, 
+		     double      *TEMP, 
+		     double      *MOIST, 
+		     double       FieldCapacity,
+		     DATE_STRUCT  startdate, 
+		     int          Nvals ) {
+/**********************************************************************
+  CalcPlantingDay     Keith Cherkauer           June 19, 2017
+
+
+  Modifications
+
+**********************************************************************/
+
+  int ErrNum=0;
+  int didx;
+
+  for ( didx = 0; didx < Nvals; didx++ ) {
+    if ( TEMP[didx] >= 10. && MOIST[didx] < FieldCapacity ) PDay[didx] = 1;
+  }
+
+  return 0;
+
+}
+
 int GetChillingHoursInfo( PenInfoStruct   *ChillHrInfo, 
 			  StatInfoStruct  *StatInfo, 
 			  char           **ColNames, 
@@ -1614,7 +1885,11 @@ int GetChillingHoursInfo( PenInfoStruct   *ChillHrInfo,
 
 }
 
-int CalcChillingHours( double *ChillHr, double *TMIN, double *TMAX, DATE_STRUCT startdate, int Nvals ) {
+int CalcChillingHours( double *ChillHr, 
+		       double *TMIN, 
+		       double *TMAX, 
+		       DATE_STRUCT startdate, 
+		       int Nvals ) {
 /**********************************************************************
   CalcChillingHours     Keith Cherkauer           May 30, 2017
 
@@ -1675,6 +1950,404 @@ int CalcChillingHours( double *ChillHr, double *TMIN, double *TMAX, DATE_STRUCT 
   }
 
   free(tmpTair);
+
+  return ErrNum;
+
+}
+
+int GetBudFreezeInfo( PenInfoStruct   *BudFreezeInfo, 
+		      StatInfoStruct  *StatInfo, 
+		      char           **ColNames, 
+		      int              NumCols ) {
+/**********************************************************************
+  GetBudFreezeInfo     Keith Cherkauer           June 20, 2017
+
+  Determine if the required columns are in the set of model output
+  files to complete an off-line calculation of Bud Freeze, which 
+  requires calculation of Chilling Hours as defined by Janna Beckerman 
+  (Purdue, HORT) for the INCCIA 2017.   If so, then store the required 
+  information for use later in the processing script.
+
+  Modifications
+  2017-May-30 copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
+
+  // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
+  static char *BudFreezeList[] = { "IN_TMIN", "IN_TMAX", "OUT_BUD_FREEZE" };
+
+  int cidx, sidx, idx;
+
+  // Determine columns to be processed
+  BudFreezeInfo->Ncols = 3;
+  BudFreezeInfo->ColNumList  = (int *)calloc(BudFreezeInfo->Ncols,sizeof(int));
+  BudFreezeInfo->ColNameList = (char **)calloc(BudFreezeInfo->Ncols,sizeof(char *));
+  BudFreezeInfo->MaxColNum   = -9;
+ 
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < BudFreezeInfo->Ncols; cidx++ ) {
+    BudFreezeInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( BudFreezeInfo->ColNameList[cidx], BudFreezeList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], BudFreezeInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      BudFreezeInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], BudFreezeInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Chilling Hour calculation not found, so will not be computed.\n" );
+	BudFreezeInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], BudFreezeInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      BudFreezeInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( BudFreezeInfo->ColNumList[cidx] > BudFreezeInfo->MaxColNum ) 
+      BudFreezeInfo->MaxColNum = BudFreezeInfo->ColNumList[cidx]+1;
+ }
+ 
+  // check is the calculated statistics is in Statinfo more than once
+  BudFreezeInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  BudFreezeInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], BudFreezeInfo->ColNameList[BudFreezeInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      BudFreezeInfo->OutputCols[BudFreezeInfo->Noutput] = sidx;
+      BudFreezeInfo->Noutput++;
+    }
+  }
+
+ return (TRUE);
+
+}
+
+int CalcBudFreeze( double *BudFreeze, 
+		   double *TMIN, 
+		   double *TMAX, 
+		   DATE_STRUCT startdate, 
+		   int Nvals ) {
+/**********************************************************************
+  CalcBudFreeze     Keith Cherkauer           June 20, 2017
+
+  This subroutine calculates Chilling Hours then evaluates the 
+  potential of bud freeze, by looking at 5 day average temperatures
+  cold enough to freeze (kill) the bud that has been set once chilling
+  hours have accumulated to 1200.  Developed as part of the Agriculture 
+  Working Group of the 2017 INCCIA.  
+
+  Chilling hours evalaute the accumulation of cold required to set the 
+  buds of fruit trees and bushes.
+
+  Source: Janna Beckerman, Purdue
+
+  Modifications
+
+**********************************************************************/
+
+  char ColdEnough = FALSE;
+  char WarmEnough = FALSE;
+  char FrozenBud = FALSE;
+  int ErrNum=0;
+  int didx, idx, WarmDays;
+  double *tmpChillHr;
+
+  tmpChillHr = (double *)calloc( Nvals, sizeof(double) );
+  ErrNum = CalcChillingHours( tmpChillHr, TMIN, TMAX, startdate, Nvals );
+
+  for ( idx = 0; idx < Nvals; idx++ ) BudFreeze[didx] = 0;
+
+  // Look for periods with potential killing frost after accumultion of 1200 chilling hours
+  didx = 0;
+  // check that at least 1200 chilling hours have accumulated
+  while ( didx < Nvals && tmpChillHr[didx] < 1200 ) didx++;
+  WarmDays = 0;
+  if ( didx < Nvals ) {
+    ColdEnough = TRUE;
+    while ( didx < Nvals && !WarmEnough ) {
+      // check that at least 14 days of warm weather have occurred
+      if ( TMIN[didx] > 7.2 ) WarmDays++;
+      if ( WarmDays >= 14 ) WarmEnough = TRUE;
+      didx++;
+    }
+    if ( WarmEnough ) {
+      // check for freezing conditions with sensitive buds
+      while ( didx < Nvals && !FrozenBud ) {
+	if ( TMIN[didx] < -2.78 ) {
+	  FrozenBud = TRUE;
+	  BudFreeze[didx] = 1;
+	}
+	didx++;
+      }
+      if ( FrozenBud )
+	for ( idx = didx; idx < Nvals; idx++ ) BudFreeze[didx] = 1;
+    }
+  }
+
+  free(tmpChillHr);
+
+  return ErrNum;
+
+}
+
+int GetDrainModWorkingDaysInfo( PenInfoStruct   *DModWDaysInfo, 
+				StatInfoStruct  *StatInfo, 
+				char           **ColNames, 
+				int              NumCols ) {
+  /**********************************************************************
+  GetDrainModWorkingDaysInfo     Keith Cherkauer           June 19, 2017
+
+  Number of days per week when soil moisture in the top layer < 
+  max moisture - 20 mm, Pi < 6 mm & Pi-1 < 6cm (Ale et al. 2009)
+
+  Modifications
+  2017-May-30 copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
+
+  // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
+  static char *DModWDaysList[] = { "OUT_PREC", "OUT_SOIL_MOIST_0", "OUT_DMWD" };
+
+  int cidx, sidx, idx;
+
+  // Determine columns to be processed
+  DModWDaysInfo->Ncols = 3;
+  DModWDaysInfo->ColNumList  = (int *)calloc(DModWDaysInfo->Ncols,sizeof(int));
+  DModWDaysInfo->ColNameList = (char **)calloc(DModWDaysInfo->Ncols,sizeof(char *));
+  DModWDaysInfo->MaxColNum   = -9;
+ 
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < DModWDaysInfo->Ncols; cidx++ ) {
+    DModWDaysInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( DModWDaysInfo->ColNameList[cidx], DModWDaysList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], DModWDaysInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      DModWDaysInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], DModWDaysInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Chilling Hour calculation not found, so will not be computed.\n" );
+	DModWDaysInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], DModWDaysInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      DModWDaysInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( DModWDaysInfo->ColNumList[cidx] > DModWDaysInfo->MaxColNum ) 
+      DModWDaysInfo->MaxColNum = DModWDaysInfo->ColNumList[cidx]+1;
+ }
+ 
+  // check is the calculated statistics is in Statinfo more than once
+  DModWDaysInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  DModWDaysInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], DModWDaysInfo->ColNameList[DModWDaysInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      DModWDaysInfo->OutputCols[DModWDaysInfo->Noutput] = sidx;
+      DModWDaysInfo->Noutput++;
+    }
+  }
+
+ return (TRUE);
+
+}
+
+int CalcDrainModWorkingDays( double *DModWDays, 
+			     double *PREC, 
+			     double *MOIST, 
+			     double  MaxMoist,
+			     DATE_STRUCT startdate, 
+			     int Nvals ) {
+/**********************************************************************
+  CalcDrainModWorkingDays     Keith Cherkauer           June 19, 2017
+
+
+  Source: Ale et al., 2009
+
+  Modifications
+
+**********************************************************************/
+
+  int ErrNum=0;
+  int didx, hidx;
+  double tmpTMIN, tmpTMAX;
+  double tmpStartJulDate, tmpEndJulDate;
+  double *tmpTair;
+
+  // Compute DRAINMOD working days
+  DModWDays[0] = 0;
+  for ( didx=1; didx<Nvals; didx++ ) {
+    DModWDays[didx] = 0;
+    if ( MOIST[didx] < MaxMoist - 20. ) {
+      if ( PREC[didx] < 6. && PREC[didx-1] < 60. ) {
+	// check precipitation condition - soil is considered workable
+	DModWDays[didx] = 1;
+      }
+    }
+  }
+
+  return ErrNum;
+
+}
+
+int GetDaysSuitable4FieldWorkInfo( PenInfoStruct   *DSFWInfo, 
+				   StatInfoStruct  *StatInfo, 
+				   char           **ColNames, 
+				   int              NumCols ) {
+  /**********************************************************************
+  GetDaysSuitable4FieldWorkInfo     Keith Cherkauer           June 19, 2017
+
+  Ben Gramig's regression model to determine the workability of 
+  agricultural fields.
+
+  Source: Gramig, Massey and Yun (2017). Nitrogen application 
+    decision-making under climate risk in the US Corn Belt, 
+    Climate Risk Management, 15, 82-89.
+
+  Modifications
+  2017-May-30 copied from GetTotalRunoffInfo   KAC
+
+**********************************************************************/
+
+  // DO NOT MODIFY THIS LIST - unless you are also changing the calculation for total runoff!
+  static char *DSFWList[] = { "IN_PREC", "IN_TMAX", "IN_TMIN", "OUT_DSFW" };
+
+  int cidx, sidx, idx;
+
+  // Determine columns to be processed
+  DSFWInfo->Ncols = 4;
+  DSFWInfo->ColNumList  = (int *)calloc(DSFWInfo->Ncols,sizeof(int));
+  DSFWInfo->ColNameList = (char **)calloc(DSFWInfo->Ncols,sizeof(char *));
+  DSFWInfo->MaxColNum   = -9;
+ 
+  // Identify required columns in the input file
+  for ( cidx = 0; cidx < DSFWInfo->Ncols; cidx++ ) {
+    DSFWInfo->ColNameList[cidx] = (char *)calloc(25,sizeof(char));
+    strcpy( DSFWInfo->ColNameList[cidx], DSFWList[cidx] );
+    for ( sidx=0; sidx<StatInfo->Ncols; sidx++ )
+      // check for variable in StatInfo table
+      if ( strcasecmp( StatInfo->ColNameList[sidx], DSFWInfo->ColNameList[cidx] ) == 0 ) 
+	break;
+    if ( sidx < StatInfo->Ncols ) 
+      // variable found in current table
+      DSFWInfo->ColNumList[cidx] = sidx;
+    else {
+      // variable not found in current table, so check if it is in input file
+      for ( idx = 0; idx < NumCols; idx++ )
+	if ( strcasecmp( ColNames[idx], DSFWInfo->ColNameList[cidx] ) == 0 )
+	  break;
+      if ( idx == NumCols ) {
+	// handle missing column by turning off calculation
+	fprintf( stderr, "Columns required for Chilling Hour calculation not found, so will not be computed.\n" );
+	DSFWInfo->Ncols = 0;
+	return (FALSE);
+      }
+      // add missing variable to the StatInfo table (must reallocate memory)
+      StatInfo->Ncols++;
+      if ( idx > StatInfo->MaxColNum ) StatInfo->MaxColNum = idx;
+      StatInfo->ColNameList = (char **)realloc( StatInfo->ColNameList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColNameList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColNameList[StatInfo->Ncols-1], DSFWInfo->ColNameList[cidx] );
+      StatInfo->ColStatList = (char **)realloc( StatInfo->ColStatList, StatInfo->Ncols*sizeof(char *) );
+      StatInfo->ColStatList[StatInfo->Ncols-1] = (char *)calloc(25,sizeof(char));
+      strcpy( StatInfo->ColStatList[StatInfo->Ncols-1], "none" );
+      StatInfo->ColNumList = (int *)realloc( StatInfo->ColNumList, StatInfo->Ncols*sizeof(int) );
+      StatInfo->ColNumList[StatInfo->Ncols-1] = idx;
+      DSFWInfo->ColNumList[cidx] = StatInfo->Ncols-1;
+    }
+    // reset max column setting for current statistic
+    if ( DSFWInfo->ColNumList[cidx] > DSFWInfo->MaxColNum ) 
+      DSFWInfo->MaxColNum = DSFWInfo->ColNumList[cidx]+1;
+ }
+ 
+  // check is the calculated statistics is in Statinfo more than once
+  DSFWInfo->OutputCols = (int *)calloc(StatInfo->Ncols,sizeof(int));
+  DSFWInfo->Noutput = 0;
+  for ( sidx=0; sidx<StatInfo->Ncols; sidx++ ) {
+    if ( strcasecmp( StatInfo->ColNameList[sidx], DSFWInfo->ColNameList[DSFWInfo->Ncols-1] ) == 0 ) {
+      // for each occurance of stat name add column to list
+      DSFWInfo->OutputCols[DSFWInfo->Noutput] = sidx;
+      DSFWInfo->Noutput++;
+    }
+  }
+
+ return (TRUE);
+
+}
+
+int CalcDaysSuitable4FieldWork( double *DSFW, double *PREC, double *TMAX, double *TMIN, DATE_STRUCT startdate, int Nvals ) {
+/**********************************************************************
+  CalcDaysSuitable4FieldWork     Keith Cherkauer           June 19, 2017
+
+  Ben Gramig's regression model to determine the workability of 
+  agricultural fields.
+
+  Source: Gramig, Massey and Yun (2017). Nitrogen application 
+    decision-making under climate risk in the US Corn Belt, 
+    Climate Risk Management, 15, 82-89.
+
+  Modifications
+
+**********************************************************************/
+
+  int ErrNum=0;
+  int didx, widx;
+  double avgTMIN[52], avgTMAX[52], sumPREC[52];
+  double tmpStartJulDate, tmpEndJulDate;
+  double *tmpTair;
+
+  // Compute days suitable for field work
+  DSFW[0] = 0;
+  for ( didx=1; didx<Nvals; didx++ ) {
+  }
+  for ( widx = 1; widx < 52; widx++ ) {
+    /* DSFW[didx] = -5.56285 + 0.210292*(avgTMAX) - 0.00237*pow(avgTMAX,2.)  */
+    /*   -0.23367*(avgTMIN) - 0.00251*pow(avgTMIN,2)  */
+    /*   + 0.005212*((avgTMAX)*(avgTMIN)) - 1.12549*(sumPREC)  */
+    /*   + 0.113922*(sumPREC,2) + 0.055012*(avgTMAX[widx-1])  */
+    /*   - 0.03594*(avgTMIN[widx-1]) - 1.01346*(sumPREC[widx-1])  */
+    /*   + 0.00868*((sumPREC[widx-1])*(avgTMIN[widx]))  */
+    /*   + 0.021476*(annual time trend) - 0.00025*pow(annual time trend,2)  */
+    /*   - 0.45365*(spring indicator) + 0.374839*(fall indicator)  */
+    /*   - 0.42513*(winter indicator) + 3.065181*(soil drainage class index) */
+    /*   - 0.43322*pow(soil drainage class index,2); */
+  }
 
   return ErrNum;
 

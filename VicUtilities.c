@@ -264,6 +264,7 @@ int get_header_ASCII( gzFile **fin,
     (*ColAggTypes)[vidx] = GetVarAggType( (*ColNames)[vidx] );
     // Update model parameters
     if ( strncmp( varname, "OUT_SOIL_LIQ", 12 ) == 0 ) (*NumLayers)++;
+    else if ( strncmp( varname, "OUT_SOIL_MOIST", 12 ) == 0 ) (*NumLayers)++;
     if ( strncmp( varname, "OUT_SOIL_TNODE", 14 ) == 0 ) (*NumNodes)++;
     if ( strncmp( varname, "OUT_SWE_BAND", 12 ) == 0 ) (*NumBands)++;
     if ( strncmp( varname, "OUT_FDEPTH", 10 ) == 0 ) (*NumFrostFronts)++;
@@ -440,7 +441,7 @@ int get_record_PEN( int            BinaryFile,
 
   ********************************************************************************/
 
-  int                 cidx, vidx;
+  int    idx, cidx, vidx;
   double Rnet, G, U, Ts, RH, Ta;
   double SVP, vpd, delta, lv, gamma, A, denominator;
 
@@ -484,8 +485,11 @@ int get_record_PEN( int            BinaryFile,
     data[TRoffInfo.ColNumList[2]] = data[TRoffInfo.ColNumList[0]] + data[TRoffInfo.ColNumList[1]];
 
   /***** Compute total soil moisture and add to data[cidx] *****/
-  if ( CalcTSM )
-    data[TSMInfo.ColNumList[3]] = data[TSMInfo.ColNumList[0]] + data[TSMInfo.ColNumList[1]] + data[TSMInfo.ColNumList[2]];
+  if ( CalcTSM ) {
+    data[TSMInfo.ColNumList[TSMInfo.Ncols-1]] = data[TSMInfo.ColNumList[0]];
+    for ( idx = 1; idx < TSMInfo.Ncols-1; idx++ )
+      data[TSMInfo.ColNumList[TSMInfo.Ncols-1]] = data[TSMInfo.ColNumList[idx]];
+  }
 
   return (0);
 
@@ -708,3 +712,36 @@ char *reset_spaces( char *TmpStr ) {
   return TmpStr;
 }
 
+void strip(char *s)
+{
+    char *p = s;
+    int n;
+    while (*s)
+    {
+        n = strcspn(s, SPACE);
+        strncpy(p, s, n);
+        p += n;
+        s += n + strspn(s+n, SPACE);
+    }
+    *p = 0;
+}
+
+char *strip_copy(char *s)
+{
+    char *buf = malloc(1 + strlen(s));
+    if (buf)
+    {
+        char *p = buf;
+        char const *q;
+        int n;
+        for (q = s; *q; q += n + strspn(q+n, SPACE))
+        {
+            n = strcspn(q, SPACE);
+            strncpy(p, q, n);
+            p += n;
+        }
+        *p++ = '\0';
+        buf = realloc(buf, p - buf);
+    }
+    return buf;
+}
