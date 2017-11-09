@@ -20,6 +20,16 @@ int main(int argc, char *argv[])
               output formats.    KAC
   18-Jan-2017 Updated code to work correctly and without errors
               when given an ASCII data file.             KAC
+  28-Sep-2017 Updated get_record_PEN to refelct addition of one
+              more set of possible calculations due to recent 
+              updates to VicOutputASMStats.c.  Also added SKIP
+              flag, which is set to TRUE with gz function tries
+              but fails to read from the input file.  The SKIP 
+              flag then allows follow-up processing to be skipped 
+              for the incomplete line.  Without it, was getting an 
+              error when the last line in an ASCII file included a 
+              \n, so loop passed the check for EOF, but there was
+              no additional information to be read.           KAC
 
   ***** Seems to only work if variables in list appear in the same order 
         as in the original file. Why????? - note from VicLdasDump2ASCII.c
@@ -37,7 +47,7 @@ int main(int argc, char *argv[])
   char    VarList[MaxColumns][256];
   char   *VarName, *ptr;
   int    *OutputCol;
-  int     DONE, DataStart;
+  int     DONE, DataStart, SKIP;
   int     TimeStep, NumLayers, NumNodes, NumBands, NumFrostFronts;
   int     NumLakeNodes, NumCols, NumOut;
   int     ErrNum;
@@ -124,27 +134,31 @@ int main(int argc, char *argv[])
 
   // Read all data records
   while ( !gzeof( InFile ) ) {
+    SKIP=FALSE;
     if ( BinaryFile ) {
       //ReadBytes = gzread(InFile,RawData,NumBytes*sizeof(char));
       if ( ( ReadBytes = gzread(InFile,RawData[0],NumRead) ) != NumRead ) {
 	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got %d of %ld bytes.\n", name, ReadBytes, NumRead*sizeof(char) );
+	SKIP=TRUE;
       }
     }
     else {
       if ( gzgets(InFile,RawData[0],MaxCharData) == NULL ) {
-	fprintf( stderr, "WARNING: Unable to read in complete flux file %s, got incomplete line.\n", name );
+	SKIP=TRUE;
       }
     }
-    RawPtr = 0;
-    ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
-			     ColMults, date, data, NumCols, NumOut, &DataStart, 
-			     FALSE, TempInfo, FALSE, TempInfo );
-    for ( idx = 0; idx < maxdate-1; idx++ ) fprintf( stdout, "%i\t", date[idx] );
-    fprintf( stdout, "%i", date[idx] );
-    for ( idx = 0; idx < NumCols-maxdate; idx++ )
-      if ( !UseVarList || OutputCol[idx+maxdate] ) 
-	fprintf( stdout, "\t%f", data[idx] );
-    fprintf( stdout, "\n" );
+    if ( !SKIP ) {
+      RawPtr = 0;
+      ErrNum = get_record_PEN( BinaryFile, RawData, &RawPtr, ColNames, ColTypes, 
+			       ColMults, date, data, NumCols, NumOut, &DataStart, 
+			       FALSE, TempInfo, FALSE, TempInfo, FALSE, TempInfo );
+      for ( idx = 0; idx < maxdate-1; idx++ ) fprintf( stdout, "%i\t", date[idx] );
+      fprintf( stdout, "%i", date[idx] );
+      for ( idx = 0; idx < NumCols-maxdate; idx++ )
+	if ( !UseVarList || OutputCol[idx+maxdate] ) 
+	  fprintf( stdout, "\t%f", data[idx] );
+      fprintf( stdout, "\n" );
+    }
   }
 
   // close input file

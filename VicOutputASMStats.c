@@ -40,8 +40,8 @@ int WriteXyzFiles( char *, double **, double *, double *, int, int,
 		   double, double, double, int, int );
 int ReadXyzFiles(char *, double **, double **, int *, int *, double *, 
 		      double *, double *, int *, double ***);
-int ReadOutputFiles ( char, char *, double **, double *, double *, int,
-		      int, double, double, double, int);
+int ReadSpatialDataFiles ( char, char *, double **, double *, double *, int,
+			   int, double, double, double, int);
 
 int main(int argc, char *argv[]) {
 /************************************************************************
@@ -1313,9 +1313,10 @@ int GetStatInfo( char            *StatInfoParam,
 	// threshold is a valid file name, so read contents into threshold array
 	sscanf( tmpstr, "%*s %*s %*s %s %s", shortName, thresName );
 	// read spatially distributed thresholds from existing file
-	tmpCells = ReadOutputFiles( ArcGrid, thresName, StatInfo->Thres[cidx],
-				    GridLat, GridLng, nrows, ncols, minlat,
-				    minlng, cellsize, NODATA);
+	tmpCells = ReadSpatialDataFiles( ArcGrid, thresName, 
+					 StatInfo->Thres[cidx], GridLat, 
+					 GridLng, nrows, ncols, minlat,
+					 minlng, cellsize, NODATA);
 	if ( tmpCells != nrows*ncols ) {
 	  fprintf( stderr, "ERROR: Number of cells from threshold file does not match the number defined for the current domain.\n" );
 	  exit (FAIL);
@@ -1341,9 +1342,9 @@ int GetStatInfo( char            *StatInfoParam,
       for (;(token = strtok(NULL, " ")) != NULL; last = token);
       last = strip_copy(last);
       // read spatially distributed thresholds from existing file
-      tmpCells = ReadOutputFiles( ArcGrid, last, StatInfo->Extra[cidx],
-				  GridLat, GridLng, nrows, ncols, minlat,
-				  minlng, cellsize, NODATA);
+      tmpCells = ReadSpatialDataFiles( ArcGrid, last, StatInfo->Extra[cidx],
+				       GridLat, GridLng, nrows, ncols, minlat,
+				       minlng, cellsize, NODATA);
       if ( tmpCells != nrows*ncols ) {
 	fprintf( stderr, "ERROR: Number of cells from threshold file does not match the number defined for the current domain.\n" );
 	exit (FAIL);
@@ -2725,19 +2726,19 @@ int WriteXyzFiles ( char    *filename,
 
 }
 
-int ReadOutputFiles ( char              ArcGrid,
-		      char             *GridFileName,
-		      double          **GridValues,
-		      double           *GridLat,
-		      double           *GridLng,
-		      int               nrows,
-		      int               ncols,
-		      double            minlat,
-		      double            minlng,
-		      double            cellsize,
-		      int               NODATA ) {
+int ReadSpatialDataFiles ( char              ArcGrid,
+			   char             *GridFileName,
+			   double          **GridValues,
+			   double           *GridLat,
+			   double           *GridLng,
+			   int               nrows,
+			   int               ncols,
+			   double            minlat,
+			   double            minlng,
+			   double            cellsize,
+			   int               NODATA ) {
 /**********************************************************************
-  ReadOutputFiles       Keith Cherkauer           June 14, 2017
+  ReadSpatialDataFiles       Keith Cherkauer           June 14, 2017
 
   This subroutine opens an existing data file in ArcInfo Grid or XYZ
   format, extracts it contents, and then checks that the data in the
@@ -2759,30 +2760,32 @@ int ReadOutputFiles ( char              ArcGrid,
     Ncells = read_arcinfo_grid(GridFileName, &tmp_lat, &tmp_lng, &tmp_ncols, 
 			       &tmp_nrows, &tmp_ll_lat, &tmp_ll_lng, 
 			       &tmp_cellsize, &tmp_NODATA, &tmp_values );
-    // Match coordinates from new input file with those already defined
-    if ( fabs( tmp_cellsize - cellsize ) > SMALL_CHK_VAL ) {
-      fprintf( stderr, "ERROR: Cellsize of %s (%f), does not match previously defined cellsize (%f).\n", GridFileName, tmp_cellsize, cellsize );
-      exit(FAIL);
-    }
-    // find input file upper left coordinate in original grid domain
-    tmp_col=0;
-    col = (int)((tmp_ll_lng + (double)tmp_col*tmp_cellsize - minlng) / cellsize);
-    if ( col < 0 ) {
-      tmp_col = col * -1;
-      col = 0;
-      if ( tmp_ncols - tmp_col > ncols ) {
-	fprintf( stderr, "ERROR: Not enough columns in the file being read, %s, to match existing domain.\n", GridFileName );
+    if ( cellsize != NODATA ) {
+      // Match coordinates from new input file with those already defined
+      if ( fabs( tmp_cellsize - cellsize ) > SMALL_CHK_VAL ) {
+	fprintf( stderr, "ERROR: Cellsize of %s (%f), does not match previously defined cellsize (%f).\n", GridFileName, tmp_cellsize, cellsize );
 	exit(FAIL);
       }
-    } 
-    tmp_row = 0;
-    row = (tmp_ll_lat + (double)tmp_row*tmp_cellsize - minlat) / cellsize;
-    if ( row < 0 ) {
-      tmp_row = row * -1;
-      row = 0;
-      if ( tmp_nrows - tmp_row > nrows ) {
-	fprintf( stderr, "ERROR: Not enough rows in the file being read, %s, to match existing domain.\n", GridFileName );
-	exit(FAIL);
+      // find input file upper left coordinate in original grid domain
+      tmp_col=0;
+      col = (int)((tmp_ll_lng + (double)tmp_col*tmp_cellsize - minlng) / cellsize);
+      if ( col < 0 ) {
+	tmp_col = col * -1;
+	col = 0;
+	if ( tmp_ncols - tmp_col > ncols ) {
+	  fprintf( stderr, "ERROR: Not enough columns in the file being read, %s, to match existing domain.\n", GridFileName );
+	  exit(FAIL);
+	}
+      } 
+      tmp_row = 0;
+      row = (tmp_ll_lat + (double)tmp_row*tmp_cellsize - minlat) / cellsize;
+      if ( row < 0 ) {
+	tmp_row = row * -1;
+	row = 0;
+	if ( tmp_nrows - tmp_row > nrows ) {
+	  fprintf( stderr, "ERROR: Not enough rows in the file being read, %s, to match existing domain.\n", GridFileName );
+	  exit(FAIL);
+	}
       }
     }
     // copy new data into provided array
