@@ -112,6 +112,10 @@ int main(int argc, char *argv[]) {
 
   NOTE: As of 2017-Jun-12 - Support for XYZ files has not been checked.  KAC
   NOTE: As of 2017-Jun-12 - Support for no Overwrite is not completed.  KAC
+  NOTE: Should be able to double check that a file has been given for 
+    OUT_PLANT_DAY and report that the special case has been violated.
+    Should also be able to catch a blank line in the stat control file,
+    and gracefully skip it rather than throwing a segementation fault.  KAC
 
 ***********************************************************************/
 
@@ -201,7 +205,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr,"\t- OUT_TOTAL_RUNOFF is the sum of \"OUT_RUNOFF\" and \"OUT_BASEFLOW\",\n");
     fprintf(stderr,"\t- OUT_TOTAL_SOIL_MOIST is the sum of \"OUT_SOIL_MOIST\" for each layer,\n");
     fprintf(stderr,"\t- OUT_MGDD modified growing degree day (from mrcc.isws.illinois.edu), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\",\n");
-    fprintf(stderr,"\t- OUT_PLANT_DAY is a Boolean variable indicating whether or not soil \n\t  surface conditions support planting, requires \"OUT_SOIL_MOIST_0\" \n\t  and \"OUT_SOIL_TEMP_0\".  Also requires that a file with top soil \n\t  layer fiedl capacity [mm] be provided following the statistic \n\t  definition in the soil control file.\n");
+    fprintf(stderr,"\t- OUT_PLANT_DAY is a Boolean variable indicating whether or not soil \n\t  surface conditions support planting, requires \"OUT_SOIL_MOIST_0\" \n\t  and \"OUT_SOIL_TEMP_0\".  Also requires that a file with top soil \n\t  layer field capacity [mm] be provided following the statistic \n\t  definition in the soil control file.\n");
     fprintf(stderr,"\t- OUT_CHILL_HR is the number of chilling hours (fruit trees), \n\t  requires \"IN_TMIN\" and \"IN_TMAX\".\n");
     fprintf(stderr,"\t- OUT_DMWD is the number of working days defined by DRAINMOD, \n\t  requires \"OUT_PREC\" and \"OUT_SOIL_MOIST_0\".  Also requires that \n\t  a file with top soil layer saturation [mm] be provided following \n\t  the statistic definition in the soil control file.\n");
     fprintf(stderr,"\t- OUT_DSFW is the number of of days suitable for field work \n\t  (Gramig et al, 2017), requires \"IN_PREC\", \"IN_TMIN\", \"IN_TMAX\", \n\t  and \"Soil Drainge Class\".\n");
