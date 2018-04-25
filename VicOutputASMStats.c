@@ -1256,6 +1256,8 @@ int GetStatInfo( char            *StatInfoParam,
   2017-Jun-12 to add two dimensional storage array for 
        threshold values, so files can be read in to set thresholds
        specific to each VIC model output cell. KAC
+  2018-Apr-25 fixed copy for Thres and Extra arrays when a requested
+       variable is not found in the input file.  KAC
 
 **********************************************************************/
 
@@ -1369,7 +1371,13 @@ int GetStatInfo( char            *StatInfoParam,
 	strcpy( StatInfo->ColNameList[tidx], StatInfo->ColNameList[tidx+1] );
 	strcpy( StatInfo->ColStatList[tidx], StatInfo->ColStatList[tidx+1] );
 	StatInfo->ColNumList[tidx] = StatInfo->ColNumList[tidx+1];
-	StatInfo->Thres[tidx][row][col] = StatInfo->Thres[tidx+1][row][col];
+	// copy contents of threshold and other grids
+	for ( row = 0; row < nrows; row++ ) {
+	  for ( col=0; col < ncols; col++ ) {
+	    StatInfo->Thres[tidx][row][col] = StatInfo->Thres[tidx+1][row][col];
+	    StatInfo->Extra[tidx][row][col] = StatInfo->Extra[tidx+1][row][col];
+	  }
+	}
       }
       StatInfo->Ncols--;
     }
